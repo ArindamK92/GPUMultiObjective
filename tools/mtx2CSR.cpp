@@ -20,6 +20,9 @@
 #include <queue>
 #include <utility>
 
+void printCSRRepresentation(const std::vector<int>& values, const std::vector<int>& column_indices, const std::vector<int>& row_pointers);
+
+
 void find_neighbors(const std::vector<int>& row_pointers, const std::vector<int>& column_indices, int vertex) {
     int start = row_pointers[vertex];
     int end = row_pointers[vertex + 1];
@@ -61,7 +64,7 @@ std::vector<std::tuple<int, int, int>> readMTX(const std::string& filename) {
     return graph;
 }
 
-void writeMTX(const std::string& filename, const std::vector<std::tuple<int, int, int>>& graph, int numVertices) {
+void writeMTX(const std::string& filename, const std::vector<std::tuple<int, int, int>>& graph, int numVertices, bool isGraph) {
     std::ofstream outfile(filename);
     if (!outfile.is_open()) {
         std::cerr << "Failed to open output file " << filename << std::endl;
@@ -71,6 +74,8 @@ void writeMTX(const std::string& filename, const std::vector<std::tuple<int, int
     outfile << numVertices << " " << numVertices << " " << graph.size() << "\n";
     
     for (const auto& [src, dest, weight] : graph) {
+        if (isGraph && weight < 0)
+            continue;
         outfile << src << " " << dest << " " << weight << "\n";
     }
 }
@@ -197,50 +202,114 @@ void sortAndSaveMTX(const std::string& input_filename, const std::string& output
     outfile.close();
 }
 
-// void dijkstra(const std::vector<int>& values, const std::vector<int>& column_indices, const std::vector<int>& row_pointers,
-//               int source, std::vector<int>& parent) {
-//     std::vector<int> dist(row_pointers.size() - 1, INF);
-//     std::priority_queue<std::pair<int, int>, std::vector<std::pair<int, int>>, std::greater<std::pair<int, int>>> pq;
-    
-//     dist[source] = 0;
-//     pq.push({0, source});
-//     parent[source] = source; // source is the parent of itself
+#include <iostream>
+#include <vector>
+#include <utility>  // for std::pair
 
-//     while (!pq.empty()) {
-//         int u = pq.top().second;
-//         int d = pq.top().first;
-//         pq.pop();
+#include <iostream>
+#include <vector>
+#include <utility>  // for std::pair
+#include <algorithm> // for std::remove
 
-//         if (d > dist[u]) continue;
+std::vector<std::vector<std::pair<int, int>>> CSRToAdjacencyList( std::vector<int>& values,
+     std::vector<int>& column_indices,
+     std::vector<int>& row_pointers) {
 
-//         int start = row_pointers[u];
-//         int end = row_pointers[u + 1];
-//         for (int i = start; i < end; ++i) {
-//             int v = column_indices[i];
-//             int alt = dist[u] + values[i]; // assuming all edges have weight 1
-//             if (alt < dist[v]) {
-//                 dist[v] = alt;
-//                 pq.push({dist[v], v});
-//                 parent[v] = u; // set parent
-//             }
-//         }
-//     }
-// }
-void updateShortestPath(const std::vector<int>& values, const std::vector<int>& column_indices, const std::vector<int>& row_pointers,
-                        std::vector<int>& dist, std::vector<int>& parent,
-                        const std::vector<std::tuple<int, int, int>>& changedEdges) {
+    std::vector<std::vector<std::pair<int, int>>> adjList(row_pointers.size() - 1);
 
-    std::cout << "Distance before" <<std::endl;
-    for (int i = 0; i < dist.size(); i++) {
-        std::cout <<dist[i]<< " ";
+    for (int i = 0; i < row_pointers.size() - 1; ++i) {
+        for (int j = row_pointers[i]; j < row_pointers[i + 1]; ++j) {
+            adjList[i].push_back({column_indices[j], values[j]});
+        }
     }
-    std::cout<<std::endl;
 
-    std::cout << "Parent before " <<std::endl;
-    for (int i = 0; i < parent.size(); i++) {
-        std::cout <<parent[i]<< " ";
+    return adjList;
+}
+
+void adjacencyListToCSR( std::vector<std::vector<std::pair<int, int>>>& adjList,
+    std::vector<int>& values,
+    std::vector<int>& column_indices,
+    std::vector<int>& row_pointers) {
+    values.clear();
+    column_indices.clear();
+    row_pointers.clear();
+
+    row_pointers.push_back(0);
+
+    for ( auto& neighbors : adjList) {
+        for ( auto& [neighbor, weight] : neighbors) {
+            values.push_back(weight);
+            column_indices.push_back(neighbor);
+        }
+        row_pointers.push_back(column_indices.size());
     }
-    std::cout<<std::endl;
+}
+
+void removeEdgeAndUpdateCSR(int u, int v,
+                            std::vector<int>& values,
+                            std::vector<int>& column_indices,
+                            std::vector<int>& row_pointers) {
+    // Convert CSR to adjacency list
+    auto adjList = CSRToAdjacencyList(values, column_indices, row_pointers);
+
+    // Remove edge (u, v)
+    adjList[u].erase(std::remove_if(adjList[u].begin(), adjList[u].end(),
+                                    [v](const std::pair<int, int>& p) { return p.first == v; }),
+                     adjList[u].end());
+
+    // Convert back to CSR
+    adjacencyListToCSR(adjList, values, column_indices, row_pointers);
+}
+
+void addEdgeAndUpdateCSR(int u, int v, int w,
+                         std::vector<int>& values,
+                         std::vector<int>& column_indices,
+                         std::vector<int>& row_pointers) {
+    // Convert CSR to adjacency list
+    auto adjList = CSRToAdjacencyList(values, column_indices, row_pointers);
+
+    // Add edge (u, v, w)
+    adjList[u].push_back({v, w});
+
+    // Convert back to CSR
+    adjacencyListToCSR(adjList, values, column_indices, row_pointers);
+}
+
+std::vector<std::vector<int>> CSRToInDegreeList(const std::vector<int>& values,
+                                                const std::vector<int>& column_indices,
+                                                const std::vector<int>& row_pointers) {
+    int n = row_pointers.size() - 1; // Number of vertices
+    std::vector<std::vector<int>> inDegreeList(n); // Initialize in-degree list
+
+    for (int u = 0; u < n; ++u) { // Loop through each vertex
+        int start = row_pointers[u] ;  // 1-indexed to 0-indexed
+        int end = row_pointers[u + 1] ;  // 1-indexed to 0-indexed
+        for (int i = start; i < end; ++i) {
+            int v = column_indices[i];  // Retrieve adjacent vertex
+            inDegreeList[v].push_back(u );  // Fill in the in-degree list, convert to 1-indexed
+        }
+    }
+
+    return inDegreeList;
+}
+
+#include <tuple>
+void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& new_graph_column_indices,  std::vector<int>& new_graph_row_pointers,
+                         std::vector<int>& sssp_values,  std::vector<int>& sssp_column_indices,  std::vector<int>& sssp_row_pointers,
+                         std::vector<int>& ce_graph_values,  std::vector<int>& ce_graph_column_indices,  std::vector<int>& ce_graph_row_pointers,
+                        std::vector<int>& dist, std::vector<int>& parent, std::vector<std::tuple<int, int, int>> changedEdges , std::vector<std::vector<int>> predecessor) {
+
+    // std::cout << "Distance before" <<std::endl;
+    // for (int i = 0; i < dist.size(); i++) {
+    //     std::cout <<dist[i]<< " ";
+    // }
+    // std::cout<<std::endl;
+
+    // std::cout << "Parent before " <<std::endl;
+    // for (int i = 0; i < parent.size(); i++) {
+    //     std::cout <<parent[i]<< " ";
+    // }
+    // std::cout<<std::endl;
   
     // Convert changedEdges to CSR for insertion and deletion separately
     std::vector<int> insert_values, delete_values;
@@ -251,7 +320,7 @@ void updateShortestPath(const std::vector<int>& values, const std::vector<int>& 
 
     int insert_nnz = 0, delete_nnz = 0;
 
-    for (int u = 0; u < row_pointers.size() - 1; ++u) {
+    for (int u = 0; u < new_graph_row_pointers.size() - 1; ++u) {
         for (const auto& [src, dest, weight] : changedEdges) {
             if (src - 1 == u) {
                 if (weight >= 0) {
@@ -269,34 +338,30 @@ void updateShortestPath(const std::vector<int>& values, const std::vector<int>& 
         delete_row_pointers.push_back(delete_nnz);
     }
 
+    //printCSRRepresentation(insert_values, insert_column_indices, insert_row_pointers);
+    //printCSRRepresentation(delete_values, delete_column_indices, delete_row_pointers);
 
-    insert_row_pointers.push_back(0);
-    int nnz = 0;
-
-    // Assuming vertices are 1-indexed
-    for (int u = 0; u < row_pointers.size() - 1; ++u) {
-        for (const auto& [src, dest, weight] : changedEdges) {
-            if (src - 1 == u) {
-                insert_values.push_back(weight);
-                insert_column_indices.push_back(dest - 1);
-                nnz++;
-            }
-        }
-        insert_row_pointers.push_back(nnz);
-    }
 
     // Original logic of updateShortestPath adapted to use changed_* vectors
     std::queue<int> affectedNodes;
-    std::vector<bool> isAffected(row_pointers.size() - 1, false);
+    std::vector<bool> isAffected(new_graph_row_pointers.size() - 1, false);
 
-    for (int u = 0; u < row_pointers.size() - 1; ++u) {
+    //printCSRRepresentation(sssp_values, sssp_column_indices, sssp_row_pointers);
+
+    for (int u = 0; u < new_graph_row_pointers.size() - 1; ++u) {
         int start = insert_row_pointers[u];
         int end = insert_row_pointers[u + 1];
 
         for (int i = start; i < end; ++i) {
             int v = insert_column_indices[i];
             int alt = dist[u] + insert_values[i];
+            int w = new_graph_values[i];
             if (alt < dist[v]) {
+
+                //std::cout<< u + 1 << " to "<< v + 1 << " becomes " << alt << " from "<< dist[v]<< std::endl; 
+                //std:: cout<< "Old parent" << parent[v] << " of " << v << " and "<< "New parent"<< u<<std::endl;
+                removeEdgeAndUpdateCSR(parent[v], v, sssp_values, sssp_column_indices, sssp_row_pointers);
+                addEdgeAndUpdateCSR(u, v, dist[v] - dist[u], sssp_values, sssp_column_indices, sssp_row_pointers);
                 dist[v] = alt;
                 parent[v] = u;
                 isAffected[v] = true;
@@ -305,19 +370,26 @@ void updateShortestPath(const std::vector<int>& values, const std::vector<int>& 
         }
     }
 
+    //printCSRRepresentation(sssp_values, sssp_column_indices, sssp_row_pointers);
+
     // Propagate changes for insertion
     while (!affectedNodes.empty()) {
         int u = affectedNodes.front();
         affectedNodes.pop();
         isAffected[u] = false;
 
-        int start = row_pointers[u];
-        int end = row_pointers[u + 1];
+        int start = new_graph_row_pointers[u];
+        int end = new_graph_row_pointers[u + 1];
 
         for (int i = start; i < end; ++i) {
-            int v = column_indices[i];
-            int alt = dist[u] + values[i];
+            int v = new_graph_column_indices[i];
+            int w = new_graph_values[i];
+            int alt = dist[u] + new_graph_values[i];
             if (alt < dist[v]) {
+                //std::cout<< u + 1 << " to "<< v + 1 << " becomes " << alt << " from "<< dist[v]<< std::endl;
+
+                removeEdgeAndUpdateCSR(parent[v], v, sssp_values, sssp_column_indices, sssp_row_pointers);
+                addEdgeAndUpdateCSR(u, v, w, sssp_values, sssp_column_indices, sssp_row_pointers);
                 dist[v] = alt;
                 parent[v] = u;
                 if (!isAffected[v]) {
@@ -327,60 +399,61 @@ void updateShortestPath(const std::vector<int>& values, const std::vector<int>& 
             }
         }
     }
+    //printCSRRepresentation(sssp_values, sssp_column_indices, sssp_row_pointers);
 
-    // Handle deletions
-    std::queue<int> affectedNodesForDeletion;
-    std::vector<bool> isAffectedForDeletion(row_pointers.size() - 1, false);
+    // // Handle deletions
+    // std::queue<int> affectedNodesForDeletion;
+    // std::vector<bool> isAffectedForDeletion(new_graph_row_pointers.size() - 1, false);
 
-    for (int u = 0; u < row_pointers.size() - 1; ++u) {
-        int start = delete_row_pointers[u];
-        int end = delete_row_pointers[u + 1];
+    // for (int u = 0; u < new_graph_row_pointers.size() - 1; ++u) {
+    //     int start = delete_row_pointers[u];
+    //     int end = delete_row_pointers[u + 1];
 
-        for (int i = start; i < end; ++i) {
-            int v = delete_column_indices[i];
-            if (parent[v] == u) { // if this deleted edge was part of the shortest path
-                dist[v] = INT_MAX; // Invalidate the shortest distance
-                parent[v] = -1;   // Invalidate the parent
-                isAffectedForDeletion[v] = true;
-                affectedNodesForDeletion.push(v);
-            }
-        }
-    }
+    //     for (int i = start; i < end; ++i) {
+    //         int v = delete_column_indices[i];
+    //         if (parent[v] == u) { // if this deleted edge was part of the shortest path
+    //             dist[v] = INT_MAX; // Invalidate the shortest distance
+    //             parent[v] = -1;   // Invalidate the parent
+    //             isAffectedForDeletion[v] = true;
+    //             affectedNodesForDeletion.push(v);
+    //         }
+    //     }
+    // }
 
-    // Recompute shortest paths for affected nodes
-    while (!affectedNodesForDeletion.empty()) {
-        int u = affectedNodesForDeletion.front();
-        affectedNodesForDeletion.pop();
-        isAffectedForDeletion[u] = false;
+    // // Recompute shortest paths for affected nodes
+    // while (!affectedNodesForDeletion.empty()) {
+    //     int u = affectedNodesForDeletion.front();
+    //     affectedNodesForDeletion.pop();
+    //     isAffectedForDeletion[u] = false;
 
-        int start = row_pointers[u];
-        int end = row_pointers[u + 1];
+    //     int start = new_graph_row_pointers[u];
+    //     int end = new_graph_row_pointers[u + 1];
 
-        for (int i = start; i < end; ++i) {
-            int v = column_indices[i];
-            int alt = (dist[u] == INT_MAX) ? INT_MAX : dist[u] + values[i];
-            if (alt < dist[v]) {
-                dist[v] = alt;
-                parent[v] = u;
-                if (!isAffectedForDeletion[v]) {
-                    isAffectedForDeletion[v] = true;
-                    affectedNodesForDeletion.push(v);
-                }
-            }
-        }
-    }
+    //     for (int i = start; i < end; ++i) {
+    //         int v = new_graph_column_indices[i];
+    //         int alt = (dist[u] == INT_MAX) ? INT_MAX : dist[u] + new_graph_values[i];
+    //         if (alt < dist[v]) {
+    //             dist[v] = alt;
+    //             parent[v] = u;
+    //             if (!isAffectedForDeletion[v]) {
+    //                 isAffectedForDeletion[v] = true;
+    //                 affectedNodesForDeletion.push(v);
+    //             }
+    //         }
+    //     }
+    // }
 
-    std::cout << "Distance after" <<std::endl;
-    for (int i = 0; i < dist.size(); i++) {
-        std::cout <<dist[i]<< " ";
-    }
-    std::cout<<std::endl;
+    // std::cout << "Distance after" <<std::endl;
+    // for (int i = 0; i < dist.size(); i++) {
+    //     std::cout <<dist[i]<< " ";
+    // }
+    // std::cout<<std::endl;
 
-    std::cout << "Parent after " <<std::endl;
-    for (int i = 0; i < parent.size(); i++) {
-        std::cout <<parent[i]<< " ";
-    }
-    std::cout<<std::endl;
+    // std::cout << "Parent after " <<std::endl;
+    // for (int i = 0; i < parent.size(); i++) {
+    //     std::cout <<parent[i]<< " ";
+    // }
+    // std::cout<<std::endl;
 
 }
 
@@ -432,7 +505,7 @@ void dijkstra(const std::vector<int>& values, const std::vector<int>& column_ind
             }
         }
     }
-}
+}  
 int numRows, numCols, numNonZero;
 bool readMTXToCSR(const std::string& filename, std::vector<int>& values, std::vector<int>& column_indices, std::vector<int>& row_pointers) {
     std::ifstream file(filename);
@@ -564,7 +637,11 @@ int main() {
     std::vector<int> row_pointers;
 
     readMTXToCSR("sorted_graph.mtx", values, column_indices, row_pointers);
-    printCSRRepresentation(values, column_indices, row_pointers);
+    //printCSRRepresentation(values, column_indices, row_pointers);
+
+   
+
+    
 
 
 //Find SSSP tree and store in mtx file
@@ -578,7 +655,12 @@ int main() {
 
     saveSSSPTreeToFile("SSSP_Tree.mtx", values, column_indices, row_pointers, parent);
 
-    
+    std::vector<int> sssp_values;
+    std::vector<int> sssp_column_indices;
+    std::vector<int> sssp_row_pointers;
+    sortAndSaveMTX("SSSP_Tree.mtx", "sorted_SSSP_Tree.mtx");
+    readMTXToCSR("sorted_SSSP_Tree.mtx", sssp_values, sssp_column_indices, sssp_row_pointers);
+    //printCSRRepresentation(sssp_values, sssp_column_indices, sssp_row_pointers);
 
 // Changed edges
     auto originalGraph = readMTX("sorted_graph.mtx");
@@ -592,15 +674,31 @@ int main() {
     float deletePercentage = 0.0f;
     auto newGraph = generateChangedGraph(originalGraph, numVertices, numChanges, minWeight, maxWeight, changedEdges, deletePercentage);
     // writeMTX by default sort by row for easy reading
-    writeMTX("new_graph.mtx", newGraph, numVertices); 
-    writeMTX("changed_edges.mtx", changedEdges, numVertices);
+    writeMTX("new_graph.mtx", newGraph, numVertices, true); 
+    writeMTX("changed_edges.mtx", changedEdges, numVertices, false);
+
+    std::vector<int> new_graph_values;
+    std::vector<int> new_graph_column_indices;
+    std::vector<int> new_graph_row_pointers;
+    readMTXToCSR("new_graph.mtx", new_graph_values, new_graph_column_indices, new_graph_row_pointers);
+    //printCSRRepresentation(new_graph_values, new_graph_column_indices, new_graph_row_pointers);
+
+    std::vector<int> ce_graph_values;
+    std::vector<int> ce_graph_column_indices;
+    std::vector<int> ce_graph_row_pointers;
+    readMTXToCSR("changed_edges.mtx", ce_graph_values, ce_graph_column_indices, ce_graph_row_pointers);
+    //printCSRRepresentation(ce_graph_values, ce_graph_column_indices, ce_graph_row_pointers);
 
 // Update shortest path code
-    std::cout << "CSR representation: Before updateShortestPath:\n";
-    printCSRRepresentation(values, column_indices, row_pointers);
+    
 
     // Now call the updateShortestPath function
-    updateShortestPath(values, column_indices, row_pointers, dist, parent, changedEdges);
+    auto inDegreeList = CSRToInDegreeList(new_graph_values, new_graph_column_indices, new_graph_row_pointers);
+    updateShortestPath(new_graph_values, new_graph_column_indices, new_graph_row_pointers, sssp_values, sssp_column_indices, sssp_row_pointers, ce_graph_values, ce_graph_column_indices, ce_graph_row_pointers, dist, parent, {
+        std::make_tuple(2, 3, 9),
+        std::make_tuple(3, 1, 6),
+        std::make_tuple(3, 5, 5)
+    }, inDegreeList);
 
     std::vector<int> new_values, new_column_indices, new_row_pointers;
 
@@ -616,7 +714,7 @@ int main() {
     }
 
     // Print new CSR representation
-    printCSRRepresentation(new_values, new_column_indices, new_row_pointers);
+    //printCSRRepresentation(new_values, new_column_indices, new_row_pointers);
 
     return 0;
 }
