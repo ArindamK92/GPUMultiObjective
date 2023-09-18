@@ -292,8 +292,58 @@ std::vector<std::vector<int>> CSRToInDegreeList(const std::vector<int>& values,
 
     return inDegreeList;
 }
+#include <vector>
+#include <iostream>
+#include <limits>
+
+int getWeightFromCSR(
+    const std::vector<int>& values, 
+    const std::vector<int>& column_indices, 
+    const std::vector<int>& row_pointers, 
+    int u, 
+    int v) 
+{
+    for (int i = row_pointers[u]; i < row_pointers[u + 1]; ++i) {
+        if (column_indices[i] == v) {
+            //std::cout<< "Found "<< u << " to "<< v << "with values "<< values[i]<< std::endl;
+            return values[i];
+        }
+    }
+    std::cerr << "Edge (" << u << ", " << v << ") not found." << std::endl;
+    return std::numeric_limits<int>::infinity();
+}
+
 
 #include <tuple>
+
+void markSubtreeAffected(const std::vector<int>& sssp_values, 
+                         const std::vector<int>& sssp_column_indices, 
+                         const std::vector<int>& sssp_row_pointers, 
+                         std::vector<int>& dist, 
+                         std::vector<bool>& isAffectedForDeletion, 
+                         std::queue<int>& affectedNodesForDeletion, 
+                         int node) {
+
+
+    
+    dist[node] = INT_MAX; // Invalidate the shortest distance
+    isAffectedForDeletion[node] = true;
+    affectedNodesForDeletion.push(node);
+  
+    // Get the start and end pointers for the row in CSR representation
+    int start = sssp_row_pointers[node]; // Already 1-indexed
+    int end = sssp_row_pointers[node + 1]; // Already 1-indexed
+
+    // Traverse the CSR to find the children of the current node
+    for (int i = start; i < end; ++i) {
+        int child = sssp_column_indices[i]; // Already 1-indexed
+        //std::cout<< child << " "<<std::endl;
+        // If this child node is not already marked as affected, call the function recursively
+        if (!isAffectedForDeletion[child]) {
+            markSubtreeAffected(sssp_values, sssp_column_indices, sssp_row_pointers, dist, isAffectedForDeletion, affectedNodesForDeletion, child);
+        }
+    }
+}
 void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& new_graph_column_indices,  std::vector<int>& new_graph_row_pointers,
                          std::vector<int>& sssp_values,  std::vector<int>& sssp_column_indices,  std::vector<int>& sssp_row_pointers,
                          std::vector<int>& ce_graph_values,  std::vector<int>& ce_graph_column_indices,  std::vector<int>& ce_graph_row_pointers,
@@ -370,7 +420,7 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
         }
     }
 
-    //printCSRRepresentation(sssp_values, sssp_column_indices, sssp_row_pointers);
+    printCSRRepresentation(sssp_values, sssp_column_indices, sssp_row_pointers);
 
     // Propagate changes for insertion
     while (!affectedNodes.empty()) {
@@ -399,49 +449,107 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
             }
         }
     }
-    //printCSRRepresentation(sssp_values, sssp_column_indices, sssp_row_pointers);
 
-    // // Handle deletions
-    // std::queue<int> affectedNodesForDeletion;
-    // std::vector<bool> isAffectedForDeletion(new_graph_row_pointers.size() - 1, false);
+    // Handle deletions
+    std::queue<int> affectedNodesForDeletion;
+    std::vector<bool> isAffectedForDeletion(new_graph_row_pointers.size() - 1, false);
 
-    // for (int u = 0; u < new_graph_row_pointers.size() - 1; ++u) {
-    //     int start = delete_row_pointers[u];
-    //     int end = delete_row_pointers[u + 1];
+    for (int u = 0; u < new_graph_row_pointers.size() - 1; ++u) {
+        int start = delete_row_pointers[u];
+        int end = delete_row_pointers[u + 1];
 
-    //     for (int i = start; i < end; ++i) {
-    //         int v = delete_column_indices[i];
-    //         if (parent[v] == u) { // if this deleted edge was part of the shortest path
-    //             dist[v] = INT_MAX; // Invalidate the shortest distance
-    //             parent[v] = -1;   // Invalidate the parent
-    //             isAffectedForDeletion[v] = true;
-    //             affectedNodesForDeletion.push(v);
-    //         }
-    //     }
-    // }
 
-    // // Recompute shortest paths for affected nodes
-    // while (!affectedNodesForDeletion.empty()) {
-    //     int u = affectedNodesForDeletion.front();
-    //     affectedNodesForDeletion.pop();
-    //     isAffectedForDeletion[u] = false;
+        for (int i = start; i < end; ++i) {
+            int v = delete_column_indices[i];
+            if (parent[v] == u) { // if this deleted edge was part of the shortest path
 
-    //     int start = new_graph_row_pointers[u];
-    //     int end = new_graph_row_pointers[u + 1];
+                // std::cout<< u << " to "<< v << std::endl;
+                markSubtreeAffected(sssp_values, sssp_column_indices, sssp_row_pointers, dist, isAffectedForDeletion, affectedNodesForDeletion, v);
+                // find new parent if exist
 
-    //     for (int i = start; i < end; ++i) {
-    //         int v = new_graph_column_indices[i];
-    //         int alt = (dist[u] == INT_MAX) ? INT_MAX : dist[u] + new_graph_values[i];
-    //         if (alt < dist[v]) {
-    //             dist[v] = alt;
-    //             parent[v] = u;
-    //             if (!isAffectedForDeletion[v]) {
-    //                 isAffectedForDeletion[v] = true;
-    //                 affectedNodesForDeletion.push(v);
-    //             }
-    //         }
-    //     }
-    // }
+                int newDistance = INT_MAX;
+                int newParentIndex = -1;
+
+                for ( int i = 0; i < predecessor[v].size(); i++)
+                {
+                    if(dist[predecessor[v][i]] + getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v) < newDistance )
+                    {
+                        newDistance = dist[predecessor[v][i]] + getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v);
+                        newParentIndex = predecessor[v][i]; 
+                        //std::cout<< "New parent found"<< newParentIndex << " with distance " << dist[predecessor[v][i]] << " + "<< getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v) <<std::endl;
+                    }
+                }
+                int oldParent = parent[v];
+                if (newParentIndex == -1)
+                {
+                    parent[v] = -1; 
+                    dist[v] = INT_MAX; 
+                }
+                else
+                {
+                    dist[v] = newDistance;
+                    removeEdgeAndUpdateCSR(oldParent, v, sssp_values, sssp_column_indices, sssp_row_pointers);
+                    addEdgeAndUpdateCSR(newParentIndex, v, newDistance - dist[newParentIndex] , sssp_values, sssp_column_indices, sssp_row_pointers);
+                }
+                parent[v] = newParentIndex;
+
+                // update sssp
+            }
+        }
+    }
+
+     while (!affectedNodesForDeletion.empty()) {
+        int u = affectedNodesForDeletion.front();
+        affectedNodesForDeletion.pop();
+        isAffectedForDeletion[u] = false;
+
+        int start = new_graph_row_pointers[u];
+        int end = new_graph_row_pointers[u + 1];
+
+        for (int i = start; i < end; ++i) {
+            int v = new_graph_column_indices[i];
+            int w = new_graph_values[i];
+            int alt = dist[u] + new_graph_values[i];
+            if (dist[v] == INT_MAX) {
+                //std::cout<< u + 1 << " to "<< v + 1 << " becomes " << alt << " from "<< dist[v]<< std::endl;
+
+                int newDistance = INT_MAX;
+                int newParentIndex = -1;
+
+                for ( int i = 0; i < predecessor[v].size(); i++)
+                {
+                    if(dist[predecessor[v][i]] + getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v) < newDistance )
+                    {
+                        newDistance = dist[predecessor[v][i]] + getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v);
+                        newParentIndex = predecessor[v][i]; 
+                        //std::cout<< "New parent found"<< newParentIndex << " with distance " << dist[predecessor[v][i]] << " + "<< getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v) <<std::endl;
+                    }
+                }
+                if ( v + 1 == 1)
+                    continue;
+
+                int oldParent = parent[v];
+                if (newParentIndex == -1)
+                {
+                    parent[v] = -1; 
+                    dist[v] = INT_MAX; 
+                }
+                else
+                {
+                    dist[v] = newDistance;
+                    removeEdgeAndUpdateCSR(oldParent, v, sssp_values, sssp_column_indices, sssp_row_pointers);
+                    addEdgeAndUpdateCSR(newParentIndex, v, newDistance - dist[newParentIndex] , sssp_values, sssp_column_indices, sssp_row_pointers);
+                }
+                parent[v] = newParentIndex;
+                if (!isAffected[v]) {
+                    isAffected[v] = true;
+                    affectedNodes.push(v);
+                }
+            }
+        }
+    }
+    
+
 
     // std::cout << "Distance after" <<std::endl;
     // for (int i = 0; i < dist.size(); i++) {
@@ -697,7 +805,7 @@ int main() {
     updateShortestPath(new_graph_values, new_graph_column_indices, new_graph_row_pointers, sssp_values, sssp_column_indices, sssp_row_pointers, ce_graph_values, ce_graph_column_indices, ce_graph_row_pointers, dist, parent, {
         std::make_tuple(2, 3, 9),
         std::make_tuple(3, 1, 6),
-        std::make_tuple(3, 5, 5)
+        std::make_tuple(1, 3, -5)
     }, inDegreeList);
 
     std::vector<int> new_values, new_column_indices, new_row_pointers;
