@@ -469,107 +469,135 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
 
     //printCSRRepresentation(sssp_values, sssp_column_indices, sssp_row_pointers);
 
-    for (int u = 0; u < new_graph_row_pointers.size() - 1; ++u) {
-        int start = insert_row_pointers[u];
-        int end = insert_row_pointers[u + 1];
+    // Convert to a set of independent CSRs
+    CSR insert = {
+        insert_values,
+        insert_column_indices,
+        insert_row_pointers
+    };
+    vector<CSR> singleColumnMatricesInsert = singleColumnCSR(insert, insert_row_pointers.size() - 1 );
 
-        for (int i = start; i < end; ++i) {
-            int v = insert_column_indices[i];
-            int alt = dist[u] + insert_values[i];
-            int w = new_graph_values[i];
-            if (alt < dist[v]) {
+    for (int i = 0; i < singleColumnMatricesInsert.size(); ++i) {
+        auto insert_val = singleColumnMatricesInsert[i].values;
+        auto insert_col = singleColumnMatricesInsert[i].col_idx; 
+        auto insert_row_pt = singleColumnMatricesInsert[i].row_ptr;
 
-                //std::cout<< u + 1 << " to "<< v + 1 << " becomes " << alt << " from "<< dist[v]<< std::endl; 
-                //std:: cout<< "Old parent" << parent[v] << " of " << v << " and "<< "New parent"<< u<<std::endl;
-                removeEdgeAndUpdateCSR(parent[v], v, sssp_values, sssp_column_indices, sssp_row_pointers);
-                addEdgeAndUpdateCSR(u, v, dist[v] - dist[u], sssp_values, sssp_column_indices, sssp_row_pointers);
-                dist[v] = alt;
-                parent[v] = u;
-                isAffected[v] = true;
-                affectedNodes.push(v);
-            }
-        }
-    }
 
-    printCSRRepresentation(sssp_values, sssp_column_indices, sssp_row_pointers);
+        for (int u = 0; u < new_graph_row_pointers.size() - 1; ++u) {
+        int start = insert_row_pt[u];
+        int end = insert_row_pt[u + 1];
 
-    // Propagate changes for insertion
-    while (!affectedNodes.empty()) {
-        int u = affectedNodes.front();
-        affectedNodes.pop();
-        isAffected[u] = false;
+            for (int i = start; i < end; ++i) {
+                int v = insert_col[i];
+                int alt = dist[u] + insert_val[i];
+                int w = new_graph_values[i];
+                if (alt < dist[v]) {
 
-        int start = new_graph_row_pointers[u];
-        int end = new_graph_row_pointers[u + 1];
-
-        for (int i = start; i < end; ++i) {
-            int v = new_graph_column_indices[i];
-            int w = new_graph_values[i];
-            int alt = dist[u] + new_graph_values[i];
-            if (alt < dist[v]) {
-                //std::cout<< u + 1 << " to "<< v + 1 << " becomes " << alt << " from "<< dist[v]<< std::endl;
-
-                removeEdgeAndUpdateCSR(parent[v], v, sssp_values, sssp_column_indices, sssp_row_pointers);
-                addEdgeAndUpdateCSR(u, v, w, sssp_values, sssp_column_indices, sssp_row_pointers);
-                dist[v] = alt;
-                parent[v] = u;
-                if (!isAffected[v]) {
+                    //std::cout<< u + 1 << " to "<< v + 1 << " becomes " << alt << " from "<< dist[v]<< std::endl; 
+                    //std:: cout<< "Old parent" << parent[v] << " of " << v << " and "<< "New parent"<< u<<std::endl;
+                    removeEdgeAndUpdateCSR(parent[v], v, sssp_values, sssp_column_indices, sssp_row_pointers);
+                    addEdgeAndUpdateCSR(u, v, dist[v] - dist[u], sssp_values, sssp_column_indices, sssp_row_pointers);
+                    dist[v] = alt;
+                    parent[v] = u;
                     isAffected[v] = true;
                     affectedNodes.push(v);
                 }
             }
         }
-    }
+        //printCSRRepresentation(sssp_values, sssp_column_indices, sssp_row_pointers);
 
-    // Handle deletions
-    std::queue<int> affectedNodesForDeletion;
-    std::vector<bool> isAffectedForDeletion(new_graph_row_pointers.size() - 1, false);
+        // Propagate changes for insertion
+        while (!affectedNodes.empty()) {
+            int u = affectedNodes.front();
+            affectedNodes.pop();
+            isAffected[u] = false;
 
-    for (int u = 0; u < new_graph_row_pointers.size() - 1; ++u) {
-        int start = delete_row_pointers[u];
-        int end = delete_row_pointers[u + 1];
+            int start = new_graph_row_pointers[u];
+            int end = new_graph_row_pointers[u + 1];
 
+            for (int i = start; i < end; ++i) {
+                int v = new_graph_column_indices[i];
+                int w = new_graph_values[i];
+                int alt = dist[u] + new_graph_values[i];
+                if (alt < dist[v]) {
+                    //std::cout<< u + 1 << " to "<< v + 1 << " becomes " << alt << " from "<< dist[v]<< std::endl;
 
-        for (int i = start; i < end; ++i) {
-            int v = delete_column_indices[i];
-            if (parent[v] == u) { // if this deleted edge was part of the shortest path
-
-                // std::cout<< u << " to "<< v << std::endl;
-                markSubtreeAffected(sssp_values, sssp_column_indices, sssp_row_pointers, dist, isAffectedForDeletion, affectedNodesForDeletion, v);
-                // find new parent if exist
-
-                int newDistance = INT_MAX;
-                int newParentIndex = -1;
-
-                for ( int i = 0; i < predecessor[v].size(); i++)
-                {
-                    if(dist[predecessor[v][i]] + getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v) < newDistance )
-                    {
-                        newDistance = dist[predecessor[v][i]] + getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v);
-                        newParentIndex = predecessor[v][i]; 
-                        //std::cout<< "New parent found"<< newParentIndex << " with distance " << dist[predecessor[v][i]] << " + "<< getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v) <<std::endl;
+                    removeEdgeAndUpdateCSR(parent[v], v, sssp_values, sssp_column_indices, sssp_row_pointers);
+                    addEdgeAndUpdateCSR(u, v, w, sssp_values, sssp_column_indices, sssp_row_pointers);
+                    dist[v] = alt;
+                    parent[v] = u;
+                    if (!isAffected[v]) {
+                        isAffected[v] = true;
+                        affectedNodes.push(v);
                     }
                 }
-                int oldParent = parent[v];
-                if (newParentIndex == -1)
-                {
-                    parent[v] = -1; 
-                    dist[v] = INT_MAX; 
-                }
-                else
-                {
-                    dist[v] = newDistance;
-                    removeEdgeAndUpdateCSR(oldParent, v, sssp_values, sssp_column_indices, sssp_row_pointers);
-                    addEdgeAndUpdateCSR(newParentIndex, v, newDistance - dist[newParentIndex] , sssp_values, sssp_column_indices, sssp_row_pointers);
-                }
-                parent[v] = newParentIndex;
-
-                // update sssp
             }
         }
+
     }
 
-     while (!affectedNodesForDeletion.empty()) {
+    
+
+    CSR deletion = {
+        delete_values,
+        delete_column_indices,
+        delete_row_pointers
+    };
+    vector<CSR> singleColumnMatricesDeletion = singleColumnCSR(deletion, delete_row_pointers.size() - 1 );
+
+    for (int i = 0; i < singleColumnMatricesDeletion.size(); ++i) {
+        auto delete_val = singleColumnMatricesDeletion[i].values;
+        auto delete_col = singleColumnMatricesDeletion[i].col_idx; 
+        auto delete_row_pt = singleColumnMatricesDeletion[i].row_ptr;
+
+        // Handle deletions
+        std::queue<int> affectedNodesForDeletion;
+        std::vector<bool> isAffectedForDeletion(new_graph_row_pointers.size() - 1, false);
+
+        for (int u = 0; u < new_graph_row_pointers.size() - 1; ++u) {
+            int start = delete_row_pt[u];
+            int end = delete_row_pt[u + 1];
+
+
+            for (int i = start; i < end; ++i) {
+                int v = delete_col[i];
+                if (parent[v] == u) { // if this deleted edge was part of the shortest path
+
+                    // std::cout<< u << " to "<< v << std::endl;
+                    markSubtreeAffected(sssp_values, sssp_column_indices, sssp_row_pointers, dist, isAffectedForDeletion, affectedNodesForDeletion, v);
+                    // find new parent if exist
+
+                    int newDistance = INT_MAX;
+                    int newParentIndex = -1;
+
+                    for ( int i = 0; i < predecessor[v].size(); i++)
+                    {
+                        if(dist[predecessor[v][i]] + getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v) < newDistance )
+                        {
+                            newDistance = dist[predecessor[v][i]] + getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v);
+                            newParentIndex = predecessor[v][i]; 
+                            //std::cout<< "New parent found"<< newParentIndex << " with distance " << dist[predecessor[v][i]] << " + "<< getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v) <<std::endl;
+                        }
+                    }
+                    int oldParent = parent[v];
+                    if (newParentIndex == -1)
+                    {
+                        parent[v] = -1; 
+                        dist[v] = INT_MAX; 
+                    }
+                    else
+                    {
+                        dist[v] = newDistance;
+                        removeEdgeAndUpdateCSR(oldParent, v, sssp_values, sssp_column_indices, sssp_row_pointers);
+                        addEdgeAndUpdateCSR(newParentIndex, v, newDistance - dist[newParentIndex] , sssp_values, sssp_column_indices, sssp_row_pointers);
+                    }
+                    parent[v] = newParentIndex;
+
+                    // update sssp
+                }
+            }
+        }
+        while (!affectedNodesForDeletion.empty()) {
         int u = affectedNodesForDeletion.front();
         affectedNodesForDeletion.pop();
         isAffectedForDeletion[u] = false;
@@ -620,6 +648,12 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
             }
         }
     }
+
+    }
+
+    
+
+     
     
 
 
