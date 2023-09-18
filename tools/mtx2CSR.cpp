@@ -545,6 +545,7 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
                     isAffected[v] = true;
                     affectedNodes.push(v);
                 }
+                //Testing needed
             }
         }
     }
