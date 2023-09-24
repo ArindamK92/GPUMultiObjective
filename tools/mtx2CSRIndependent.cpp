@@ -469,135 +469,107 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
 
     //printCSRRepresentation(sssp_values, sssp_column_indices, sssp_row_pointers);
 
-    // Convert to a set of independent CSRs
-    CSR insert = {
-        insert_values,
-        insert_column_indices,
-        insert_row_pointers
-    };
-    vector<CSR> singleColumnMatricesInsert = singleColumnCSR(insert, insert_row_pointers.size() - 1 );
+    for (int u = 0; u < new_graph_row_pointers.size() - 1; ++u) {
+        int start = insert_row_pointers[u];
+        int end = insert_row_pointers[u + 1];
 
-    for (int i = 0; i < singleColumnMatricesInsert.size(); ++i) {
-        auto insert_val = singleColumnMatricesInsert[i].values;
-        auto insert_col = singleColumnMatricesInsert[i].col_idx; 
-        auto insert_row_pt = singleColumnMatricesInsert[i].row_ptr;
+        for (int i = start; i < end; ++i) {
+            int v = insert_column_indices[i];
+            int alt = dist[u] + insert_values[i];
+            int w = new_graph_values[i];
+            if (alt < dist[v]) {
 
+                //std::cout<< u + 1 << " to "<< v + 1 << " becomes " << alt << " from "<< dist[v]<< std::endl; 
+                //std:: cout<< "Old parent" << parent[v] << " of " << v << " and "<< "New parent"<< u<<std::endl;
+                removeEdgeAndUpdateCSR(parent[v], v, sssp_values, sssp_column_indices, sssp_row_pointers);
+                addEdgeAndUpdateCSR(u, v, dist[v] - dist[u], sssp_values, sssp_column_indices, sssp_row_pointers);
+                dist[v] = alt;
+                parent[v] = u;
+                isAffected[v] = true;
+                affectedNodes.push(v);
+            }
+        }
+    }
 
-        for (int u = 0; u < new_graph_row_pointers.size() - 1; ++u) {
-        int start = insert_row_pt[u];
-        int end = insert_row_pt[u + 1];
+    printCSRRepresentation(sssp_values, sssp_column_indices, sssp_row_pointers);
 
-            for (int i = start; i < end; ++i) {
-                int v = insert_col[i];
-                int alt = dist[u] + insert_val[i];
-                int w = new_graph_values[i];
-                if (alt < dist[v]) {
+    // Propagate changes for insertion
+    while (!affectedNodes.empty()) {
+        int u = affectedNodes.front();
+        affectedNodes.pop();
+        isAffected[u] = false;
 
-                    //std::cout<< u + 1 << " to "<< v + 1 << " becomes " << alt << " from "<< dist[v]<< std::endl; 
-                    //std:: cout<< "Old parent" << parent[v] << " of " << v << " and "<< "New parent"<< u<<std::endl;
-                    removeEdgeAndUpdateCSR(parent[v], v, sssp_values, sssp_column_indices, sssp_row_pointers);
-                    addEdgeAndUpdateCSR(u, v, dist[v] - dist[u], sssp_values, sssp_column_indices, sssp_row_pointers);
-                    dist[v] = alt;
-                    parent[v] = u;
+        int start = new_graph_row_pointers[u];
+        int end = new_graph_row_pointers[u + 1];
+
+        for (int i = start; i < end; ++i) {
+            int v = new_graph_column_indices[i];
+            int w = new_graph_values[i];
+            int alt = dist[u] + new_graph_values[i];
+            if (alt < dist[v]) {
+                //std::cout<< u + 1 << " to "<< v + 1 << " becomes " << alt << " from "<< dist[v]<< std::endl;
+
+                removeEdgeAndUpdateCSR(parent[v], v, sssp_values, sssp_column_indices, sssp_row_pointers);
+                addEdgeAndUpdateCSR(u, v, w, sssp_values, sssp_column_indices, sssp_row_pointers);
+                dist[v] = alt;
+                parent[v] = u;
+                if (!isAffected[v]) {
                     isAffected[v] = true;
                     affectedNodes.push(v);
                 }
             }
         }
-        //printCSRRepresentation(sssp_values, sssp_column_indices, sssp_row_pointers);
-
-        // Propagate changes for insertion
-        while (!affectedNodes.empty()) {
-            int u = affectedNodes.front();
-            affectedNodes.pop();
-            isAffected[u] = false;
-
-            int start = new_graph_row_pointers[u];
-            int end = new_graph_row_pointers[u + 1];
-
-            for (int i = start; i < end; ++i) {
-                int v = new_graph_column_indices[i];
-                int w = new_graph_values[i];
-                int alt = dist[u] + new_graph_values[i];
-                if (alt < dist[v]) {
-                    //std::cout<< u + 1 << " to "<< v + 1 << " becomes " << alt << " from "<< dist[v]<< std::endl;
-
-                    removeEdgeAndUpdateCSR(parent[v], v, sssp_values, sssp_column_indices, sssp_row_pointers);
-                    addEdgeAndUpdateCSR(u, v, w, sssp_values, sssp_column_indices, sssp_row_pointers);
-                    dist[v] = alt;
-                    parent[v] = u;
-                    if (!isAffected[v]) {
-                        isAffected[v] = true;
-                        affectedNodes.push(v);
-                    }
-                }
-            }
-        }
-
     }
 
-    
+    // Handle deletions
+    std::queue<int> affectedNodesForDeletion;
+    std::vector<bool> isAffectedForDeletion(new_graph_row_pointers.size() - 1, false);
 
-    CSR deletion = {
-        delete_values,
-        delete_column_indices,
-        delete_row_pointers
-    };
-    vector<CSR> singleColumnMatricesDeletion = singleColumnCSR(deletion, delete_row_pointers.size() - 1 );
-
-    for (int i = 0; i < singleColumnMatricesDeletion.size(); ++i) {
-        auto delete_val = singleColumnMatricesDeletion[i].values;
-        auto delete_col = singleColumnMatricesDeletion[i].col_idx; 
-        auto delete_row_pt = singleColumnMatricesDeletion[i].row_ptr;
-
-        // Handle deletions
-        std::queue<int> affectedNodesForDeletion;
-        std::vector<bool> isAffectedForDeletion(new_graph_row_pointers.size() - 1, false);
-
-        for (int u = 0; u < new_graph_row_pointers.size() - 1; ++u) {
-            int start = delete_row_pt[u];
-            int end = delete_row_pt[u + 1];
+    for (int u = 0; u < new_graph_row_pointers.size() - 1; ++u) {
+        int start = delete_row_pointers[u];
+        int end = delete_row_pointers[u + 1];
 
 
-            for (int i = start; i < end; ++i) {
-                int v = delete_col[i];
-                if (parent[v] == u) { // if this deleted edge was part of the shortest path
+        for (int i = start; i < end; ++i) {
+            int v = delete_column_indices[i];
+            if (parent[v] == u) { // if this deleted edge was part of the shortest path
 
-                    // std::cout<< u << " to "<< v << std::endl;
-                    markSubtreeAffected(sssp_values, sssp_column_indices, sssp_row_pointers, dist, isAffectedForDeletion, affectedNodesForDeletion, v);
-                    // find new parent if exist
+                // std::cout<< u << " to "<< v << std::endl;
+                markSubtreeAffected(sssp_values, sssp_column_indices, sssp_row_pointers, dist, isAffectedForDeletion, affectedNodesForDeletion, v);
+                // find new parent if exist
 
-                    int newDistance = INT_MAX;
-                    int newParentIndex = -1;
+                int newDistance = INT_MAX;
+                int newParentIndex = -1;
 
-                    for ( int i = 0; i < predecessor[v].size(); i++)
+                for ( int i = 0; i < predecessor[v].size(); i++)
+                {
+                    if(dist[predecessor[v][i]] + getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v) < newDistance )
                     {
-                        if(dist[predecessor[v][i]] + getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v) < newDistance )
-                        {
-                            newDistance = dist[predecessor[v][i]] + getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v);
-                            newParentIndex = predecessor[v][i]; 
-                            //std::cout<< "New parent found"<< newParentIndex << " with distance " << dist[predecessor[v][i]] << " + "<< getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v) <<std::endl;
-                        }
+                        newDistance = dist[predecessor[v][i]] + getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v);
+                        newParentIndex = predecessor[v][i]; 
+                        //std::cout<< "New parent found"<< newParentIndex << " with distance " << dist[predecessor[v][i]] << " + "<< getWeightFromCSR(new_graph_values, new_graph_column_indices, new_graph_row_pointers, predecessor[v][i], v) <<std::endl;
                     }
-                    int oldParent = parent[v];
-                    if (newParentIndex == -1)
-                    {
-                        parent[v] = -1; 
-                        dist[v] = INT_MAX; 
-                    }
-                    else
-                    {
-                        dist[v] = newDistance;
-                        removeEdgeAndUpdateCSR(oldParent, v, sssp_values, sssp_column_indices, sssp_row_pointers);
-                        addEdgeAndUpdateCSR(newParentIndex, v, newDistance - dist[newParentIndex] , sssp_values, sssp_column_indices, sssp_row_pointers);
-                    }
-                    parent[v] = newParentIndex;
-
-                    // update sssp
                 }
+                int oldParent = parent[v];
+                if (newParentIndex == -1)
+                {
+                    parent[v] = -1; 
+                    dist[v] = INT_MAX; 
+                }
+                else
+                {
+                    dist[v] = newDistance;
+                    removeEdgeAndUpdateCSR(oldParent, v, sssp_values, sssp_column_indices, sssp_row_pointers);
+                    addEdgeAndUpdateCSR(newParentIndex, v, newDistance - dist[newParentIndex] , sssp_values, sssp_column_indices, sssp_row_pointers);
+                }
+                parent[v] = newParentIndex;
+
+                // update sssp
             }
         }
-        while (!affectedNodesForDeletion.empty()) {
+    }
+
+     while (!affectedNodesForDeletion.empty()) {
         int u = affectedNodesForDeletion.front();
         affectedNodesForDeletion.pop();
         isAffectedForDeletion[u] = false;
@@ -648,12 +620,6 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
             }
         }
     }
-
-    }
-
-    
-
-     
     
 
 
@@ -721,185 +687,6 @@ void dijkstra(const std::vector<int>& values, const std::vector<int>& column_ind
     }
 }  
 int numRows, numCols, numNonZero;
-bool readMTXToTransposeCSRUndirected(const std::string& filename, 
-                                     std::vector<int>& values, 
-                                     std::vector<int>& row_indices, 
-                                     std::vector<int>& col_pointers) 
-{
-    std::ifstream file(filename);
-    if (!file.is_open()) {
-        std::cerr << "Failed to open the file." << std::endl;
-        return false;
-    }
-
-    std::string line;
-    int numRows, numCols, numNonZero;
-
-    do {
-        std::getline(file, line);
-    } while (line[0] == '%');
-
-    std::stringstream ss(line);
-    ss >> numRows >> numCols >> numNonZero;
-
-    std::multimap<int, std::pair<int, int>> transposedEntries;
-
-    int row, col, val;
-    for (int i = 0; i < numNonZero; ++i) {
-        file >> row >> col >> val;
-        row--; // Convert to 0-based indexing
-        col--;
-
-        // Insert both (i,j) and (j,i) for undirected graphs
-        transposedEntries.insert({col, {row, val}});
-        if(col != row) // Avoid adding duplicates for self-loops
-            transposedEntries.insert({row, {col, val}});
-    }
-
-    file.close();
-
-    values.clear();
-    row_indices.clear();
-    col_pointers.clear();
-
-    int current_col = -1;
-    for(const auto& entry: transposedEntries) {
-        int col = entry.first;
-        int row = entry.second.first;
-        int value = entry.second.second;
-
-        while(current_col < col) {
-            col_pointers.push_back(values.size());
-            current_col++;
-        }
-
-        values.push_back(value);
-        row_indices.push_back(row);
-    }
-    // The last element of col_pointers
-    col_pointers.push_back(values.size());
-    return true;
-}
-
-bool readMTXToTransposeCSR(const std::string& filename, 
-                           std::vector<int>& values, 
-                           std::vector<int>& row_indices, 
-                           std::vector<int>& col_pointers) 
-{
-    std::ifstream file(filename);
-    if (!file.is_open()) {
-        std::cerr << "Failed to open the file." << std::endl;
-        return false;
-    }
-
-    std::string line;
-    int numRows, numCols, numNonZero;
-
-    do {
-        std::getline(file, line);
-    } while (line[0] == '%');
-
-    std::stringstream ss(line);
-    ss >> numRows >> numCols >> numNonZero;
-
-    std::multimap<int, std::pair<int, int>> transposedEntries;
-
-    int row, col, val;
-    for (int i = 0; i < numNonZero; ++i) {
-        file >> row >> col >> val;
-        row--; // Convert to 0-based indexing
-        col--;
-        transposedEntries.insert({col, {row, val}});
-    }
-
-    file.close();
-
-    values.clear();
-    row_indices.clear();
-    col_pointers.clear();
-    col_pointers.clear();
-
-    int current_col = -1;
-    for(const auto& entry: transposedEntries) {
-        int col = entry.first;
-        int row = entry.second.first;
-        int value = entry.second.second;
-
-        if(col > current_col) {
-            for(int i = 0; i < (col - current_col); ++i) 
-                col_pointers.push_back(values.size());
-            current_col = col;
-        }
-
-        values.push_back(value);
-        row_indices.push_back(row);
-    }
-
-    col_pointers.push_back(values.size()); // The last element of col_pointers
-    return true;
-}
-#include <map>
-bool readMTXToCSRUndirected(const std::string& filename, std::vector<int>& values, std::vector<int>& column_indices, std::vector<int>& row_pointers) {
-    std::ifstream file(filename);
-
-    if (!file.is_open()) {
-        std::cerr << "Failed to open the file." << std::endl;
-        return false;
-    }
-
-    std::string line;
-    int numRows, numCols, numNonZero;
-
-    // Skip comments
-    do {
-        std::getline(file, line);
-    } while (line[0] == '%');
-
-    std::stringstream ss(line);
-    ss >> numRows >> numCols >> numNonZero;
-
-    std::multimap<int, std::pair<int, int>> entries;
-
-    int row, col, val;
-    for (int i = 0; i < numNonZero; ++i) {
-        file >> row >> col >> val;
-        row--; // Convert to 0-based indexing
-        col--;
-
-        entries.insert({row, {col, val}});
-        if(col != row) // Avoid adding duplicates for self-loops
-            entries.insert({col, {row, val}});
-    }
-
-    file.close();
-
-    values.clear();
-    column_indices.clear();
-    row_pointers.clear();
-    row_pointers.resize(numRows + 1, 0);
-
-    int current_row = 0;
-    int nnz = 0;
-    for(const auto& entry: entries) {
-        int row = entry.first;
-        int col = entry.second.first;
-        int value = entry.second.second;
-
-        while (row > current_row) {
-            row_pointers[current_row + 1] = nnz;
-            current_row++;
-        }
-
-        values.push_back(value);
-        column_indices.push_back(col);
-        nnz++;
-    }
-
-    // Add the last row_pointer
-    row_pointers[current_row + 1] = nnz;
-
-    return true;
-}
 bool readMTXToCSR(const std::string& filename, std::vector<int>& values, std::vector<int>& column_indices, std::vector<int>& row_pointers) {
     std::ifstream file(filename);
 

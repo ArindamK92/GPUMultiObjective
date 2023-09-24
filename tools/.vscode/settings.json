@@ -69,6 +69,8 @@
         "queue": "cpp",
         "__tree": "cpp",
         "set": "cpp",
-        "thread": "cpp"
+        "thread": "cpp",
+        "charconv": "cpp",
+        "map": "cpp"
     }
 }

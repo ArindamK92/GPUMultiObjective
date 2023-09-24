@@ -1,117 +1,223 @@
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <vector>
+#include <map>
 
-using namespace std;
+bool readMTXToTransposeCSRUndirected(const std::string& filename, 
+                                     std::vector<int>& values, 
+                                     std::vector<int>& row_indices, 
+                                     std::vector<int>& col_pointers) 
+{
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open the file." << std::endl;
+        return false;
+    }
 
-struct CSR {
-    vector<int> values;
-    vector<int> row_ptr;
-    vector<int> col_idx;
-};
+    std::string line;
+    int numRows, numCols, numNonZero;
 
-vector<CSR> singleColumnCSR(const CSR& csr, int n_columns) {
-    vector<CSR> singleColumnCSRs(n_columns);
+    do {
+        std::getline(file, line);
+    } while (line[0] == '%');
 
-    for (int i = 0; i < n_columns; ++i) {
-        vector<int> values_i;
-        vector<int> row_ptr_i = {0};
-        vector<int> col_idx_i;
+    std::stringstream ss(line);
+    ss >> numRows >> numCols >> numNonZero;
 
-        for (int j = 0; j < csr.row_ptr.size() - 1; ++j) {
-            int row_start = csr.row_ptr[j];
-            int row_end = csr.row_ptr[j + 1];
+    std::multimap<int, std::pair<int, int>> transposedEntries;
 
-            bool found = false;
-            for (int k = row_start; k < row_end; ++k) {
-                if (csr.col_idx[k] == i) {
-                    values_i.push_back(csr.values[k]);
-                    col_idx_i.push_back(0);
-                    found = true;
-                    break;
-                }
-            }
+    int row, col, val;
+    for (int i = 0; i < numNonZero; ++i) {
+        file >> row >> col >> val;
+        row--; // Convert to 0-based indexing
+        col--;
 
-            if (found) {
-                row_ptr_i.push_back(values_i.size());
-            } else {
-                row_ptr_i.push_back(row_ptr_i.back());
-            }
+        // Insert both (i,j) and (j,i) for undirected graphs
+        transposedEntries.insert({col, {row, val}});
+        if(col != row) // Avoid adding duplicates for self-loops
+            transposedEntries.insert({row, {col, val}});
+    }
+
+    file.close();
+
+    values.clear();
+    row_indices.clear();
+    col_pointers.clear();
+
+    int current_col = -1;
+    for(const auto& entry: transposedEntries) {
+        int col = entry.first;
+        int row = entry.second.first;
+        int value = entry.second.second;
+
+        while(current_col < col) {
+            col_pointers.push_back(values.size());
+            current_col++;
         }
 
-        singleColumnCSRs[i] = {values_i, row_ptr_i, col_idx_i};
+        values.push_back(value);
+        row_indices.push_back(row);
     }
-
-    return singleColumnCSRs;
+    // The last element of col_pointers
+    col_pointers.push_back(values.size());
+    return true;
 }
 
-CSR combineSingleColumnCSR(const vector<CSR>& singleColumnCSRs) {
-    CSR original;
-    int n_rows = singleColumnCSRs[0].row_ptr.size() - 1;
+bool readMTXToTransposeCSR(const std::string& filename, 
+                           std::vector<int>& values, 
+                           std::vector<int>& row_indices, 
+                           std::vector<int>& col_pointers) 
+{
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open the file." << std::endl;
+        return false;
+    }
 
-    original.row_ptr.push_back(0);
+    std::string line;
+    int numRows, numCols, numNonZero;
 
-    for (int row = 0; row < n_rows; ++row) {
-        for (int col = 0; col < singleColumnCSRs.size(); ++col) {
-            const CSR& singleColumn = singleColumnCSRs[col];
+    do {
+        std::getline(file, line);
+    } while (line[0] == '%');
 
-            int row_start = singleColumn.row_ptr[row];
-            int row_end = singleColumn.row_ptr[row + 1];
+    std::stringstream ss(line);
+    ss >> numRows >> numCols >> numNonZero;
 
-            for (int k = row_start; k < row_end; ++k) {
-                original.values.push_back(singleColumn.values[k]);
-                original.col_idx.push_back(col);
-            }
+    std::multimap<int, std::pair<int, int>> transposedEntries;
+
+    int row, col, val;
+    for (int i = 0; i < numNonZero; ++i) {
+        file >> row >> col >> val;
+        row--; // Convert to 0-based indexing
+        col--;
+        transposedEntries.insert({col, {row, val}});
+    }
+
+    file.close();
+
+    values.clear();
+    row_indices.clear();
+    col_pointers.clear();
+    col_pointers.clear();
+
+    int current_col = -1;
+    for(const auto& entry: transposedEntries) {
+        int col = entry.first;
+        int row = entry.second.first;
+        int value = entry.second.second;
+
+        if(col > current_col) {
+            for(int i = 0; i < (col - current_col); ++i) 
+                col_pointers.push_back(values.size());
+            current_col = col;
         }
-        original.row_ptr.push_back(original.values.size());
+
+        values.push_back(value);
+        row_indices.push_back(row);
     }
 
-    return original;
+    col_pointers.push_back(values.size()); // The last element of col_pointers
+    return true;
 }
+bool readMTXToCSRUndirected(const std::string& filename, std::vector<int>& values, std::vector<int>& column_indices, std::vector<int>& row_pointers) {
+    std::ifstream file(filename);
 
-void printCSR(const CSR& csr) {
-    cout << "Values: ";
-    for (int val : csr.values) {
-        cout << val << " ";
+    if (!file.is_open()) {
+        std::cerr << "Failed to open the file." << std::endl;
+        return false;
     }
-    cout << endl;
 
-    cout << "Row Pointers: ";
-    for (int ptr : csr.row_ptr) {
-        cout << ptr << " ";
-    }
-    cout << endl;
+    std::string line;
+    int numRows, numCols, numNonZero;
 
-    cout << "Column Indices: ";
-    for (int idx : csr.col_idx) {
-        cout << idx << " ";
+    // Skip comments
+    do {
+        std::getline(file, line);
+    } while (line[0] == '%');
+
+    std::stringstream ss(line);
+    ss >> numRows >> numCols >> numNonZero;
+
+    std::multimap<int, std::pair<int, int>> entries;
+
+    int row, col, val;
+    for (int i = 0; i < numNonZero; ++i) {
+        file >> row >> col >> val;
+        row--; // Convert to 0-based indexing
+        col--;
+
+        entries.insert({row, {col, val}});
+        if(col != row) // Avoid adding duplicates for self-loops
+            entries.insert({col, {row, val}});
     }
-    cout << endl;
+
+    file.close();
+
+    values.clear();
+    column_indices.clear();
+    row_pointers.clear();
+    row_pointers.resize(numRows + 1, 0);
+
+    int current_row = 0;
+    int nnz = 0;
+    for(const auto& entry: entries) {
+        int row = entry.first;
+        int col = entry.second.first;
+        int value = entry.second.second;
+
+        while (row > current_row) {
+            row_pointers[current_row + 1] = nnz;
+            current_row++;
+        }
+
+        values.push_back(value);
+        column_indices.push_back(col);
+        nnz++;
+    }
+
+    // Add the last row_pointer
+    row_pointers[current_row + 1] = nnz;
+
+    return true;
 }
 
 int main() {
-    // Original CSR representation
-    CSR original = {
-        {1, 1, 1, 1, 1, 1, 1, 1},
-        {0, 1, 4, 6, 8},
-        {1, 0, 2, 3, 1, 3, 1, 2}
-    };
+    // std::vector<int> values, row_indices, col_pointers;
+    // if(readMTXToTransposeCSR("graph.mtx", values, row_indices, col_pointers)) {
+    //     std::cout << "Successfully read the MTX file and converted to Transpose CSR format!" << std::endl;
+        
+    //     std::cout << "Values Array: [";
+    //     for(const auto& val : values) std::cout << val << ", ";
+    //     std::cout << "\b\b]" << std::endl;
 
-    // Create single-column CSRs
-    vector<CSR> singleColumnMatrices = singleColumnCSR(original, 4);
+    //     std::cout << "Row Indices Array: [";
+    //     for(const auto& idx : row_indices) std::cout << idx << ", ";
+    //     std::cout << "\b\b]" << std::endl;
+        
+    //     std::cout << "Column Pointers Array: [";
+    //     for(const auto& ptr : col_pointers) std::cout << ptr << ", ";
+    //     std::cout << "\b\b]" << std::endl;
+    // } else {
+    //     std::cerr << "Failed to read the MTX file." << std::endl;
+    // }
 
-    // Print single-column CSRs
-    for (int i = 0; i < singleColumnMatrices.size(); ++i) {
-        cout << "Single-Column Matrix " << i + 1 << ":" << endl;
-        printCSR(singleColumnMatrices[i]);
-        cout << endl;
+    // std::vector<int> values, row_indices, col_pointers;
+    // if(readMTXToTransposeCSRUndirected("graph.mtx", values, row_indices, col_pointers)) {
+    //     std::cout << "Successfully read the MTX file and converted to Transpose CSR format!\n";
+    //     std::cout << "Values Array: "; for(const auto& val : values) std::cout << val << ' '; std::cout << '\n';
+    //     std::cout << "Row Indices Array: "; for(const auto& idx : row_indices) std::cout << idx << ' '; std::cout << '\n';
+    //     std::cout << "Column Pointers Array: "; for(const auto& ptr : col_pointers) std::cout << ptr << ' '; std::cout << '\n';
+    // }
+
+
+    std::vector<int> values, column_indices, row_pointers;
+    if(readMTXToCSRUndirected("graph.mtx", values, column_indices, row_pointers)) {
+        std::cout << "Successfully read the MTX file and converted to CSR format (Undirected)!\n";
+        std::cout << "Values Array: "; for(const auto& val : values) std::cout << val << ' '; std::cout << '\n';
+        std::cout << "Column Indices Array: "; for(const auto& idx : column_indices) std::cout << idx << ' '; std::cout << '\n';
+        std::cout << "Row Pointers Array: "; for(const auto& ptr : row_pointers) std::cout << ptr << ' '; std::cout << '\n';
     }
-
-    // Re-create the original CSR representation from the single-column CSR matrices
-    CSR recombined = combineSingleColumnCSR(singleColumnMatrices);
-
-    // Print the recombined CSR representation
-    cout << "Recombined CSR Matrix:" << endl;
-    printCSR(recombined);
-
     return 0;
 }
