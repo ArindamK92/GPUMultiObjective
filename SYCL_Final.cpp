@@ -441,17 +441,6 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
                          std::vector<int>& sssp_values,  std::vector<int>& sssp_column_indices,  std::vector<int>& sssp_row_pointers,
                         std::vector<int>& dist, std::vector<int>& parent , std::vector<int>& inDegreeValues, std::vector<int>& inDegreeColumnPointers, std::vector<int>& inDegreeRowValues) {
     
-    std::cout << "Distance Before" <<std::endl;
-    for (int i = 0; i < dist.size(); i++) {
-        std::cout <<dist[i]<< " ";
-    }
-    std::cout<<std::endl;
-
-    std::cout << "Parent Before " <<std::endl;
-    for (int i = 0; i < parent.size(); i++) {
-        std::cout <<parent[i]<< " ";
-    }
-    std::cout<<std::endl;
 
     
     std::vector<int> t_insert_values, t_insert_row_indices, t_insert_column_pointers;
@@ -914,18 +903,7 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
             q.wait_and_throw();
         }
     }
-    std::cout << "Distance After" <<std::endl;
-    for (int i = 0; i < dist.size(); i++) {
-        std::cout <<dist[i]<< " ";
-    }
-    std::cout<<std::endl;
 
-    std::cout << "Parent After " <<std::endl;
-    for (int i = 0; i < parent.size(); i++) {
-        std::cout <<parent[i]<< " ";
-    }
-    std::cout<<std::endl;
-    }
 
 }
 
