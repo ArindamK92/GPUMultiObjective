@@ -71,29 +71,28 @@ std::vector<Edge> constructGraph(const std::vector<Tree*>& trees, const std::vec
     return edges;
 }
 
-// SYCL kernel for updating the weights of the edges
 class UpdateWeightsKernel;
 
 void updateWeights(std::vector<Edge>& edges, const std::vector<double>& Pref) {
-    // Create a SYCL queue to manage commanded execution.
+
     cl::sycl::queue q(cl::sycl::gpu_selector_v);
 
-    // Create buffers for edges and preferences.
+
     buffer<Edge, 1> edges_buf(edges.data(), range<1>(edges.size()));
     buffer<double, 1> pref_buf(Pref.data(), range<1>(Pref.size()));
 
-    // Submit command group to queue to execute kernel.
+
     q.submit([&](handler& cgh) {
-        // Create accessors to buffers.
+
         auto edges_acc = edges_buf.get_access<access::mode::read_write>(cgh);
         auto pref_acc = pref_buf.get_access<access::mode::read>(cgh);
 
-        // Execute kernel.
+
         cgh.parallel_for<UpdateWeightsKernel>(range<1>(edges.size()), [=](id<1> idx) {
             edges_acc[idx].weight = static_cast<float>(-1/2.0);
         });
     });
-    // Wait for the queue to finish.
+
     q.wait();
 }
 //Done
@@ -590,7 +589,7 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
 
                 for (int i = start; i < end; ++i) {
                     int v = t_delete_row_indices_acc[i];
-                    affectedNodesDel_acc[v] = 1; 
+ 
                     if (parent_acc[u] == v) {                        
                         affectedNodesDel_acc[u] = 1; // Mark the starting node
                         affectedNodesList_acc[u] = 1; 
@@ -634,10 +633,8 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
         q.wait_and_throw();
     }
 
+    // Find the neighbors of effected nodes
     {
-
-
-
         // SSSP Tree
         cl::sycl::buffer sssp_values_buf(sssp_values.data(), cl::sycl::range<1>(sssp_values.size()));
         cl::sycl::buffer sssp_column_indices_buf(sssp_column_indices.data(), cl::sycl::range<1>(sssp_column_indices.size()));
@@ -672,41 +669,55 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
             });
         });
         q.wait_and_throw();
-    }
+
+        
 
 
 
     while(1)
     {
         size_t n = affectedNodesN.size();
-        int result = 0;
-        cl::sycl::buffer<int, 1> buffer_vector(affectedNodesN.data(), cl::sycl::range<1>(n));
-        cl::sycl::buffer<int, 1> buffer_result(&result, cl::sycl::range<1>(1));
-        q.submit([&](cl::sycl::handler& cgh) {
+        vector<int> compactAffectedNodesN(affectedNodesN.size());
 
-            auto acc_vector = buffer_vector.get_access<cl::sycl::access::mode::read>(cgh);
-            auto acc_result = buffer_result.get_access<cl::sycl::access::mode::write>(cgh);
+        // Find Compact Neighbor list
+        sycl::buffer<int, 1> affectedNodesNBuf(affectedNodesN.data(), sycl::range<1>(affectedNodesN.size()));
+        sycl::buffer<int, 1> compactAffectedNodesNBuf(compactAffectedNodesN.data(), sycl::range<1>(compactAffectedNodesN.size()));
+        sycl::buffer<int, 1> indicesBuf(sycl::range<1>(affectedNodesN.size()));
 
-            // Perform the reduction
-            cgh.single_task<class vector_reduction>([=]() {
-                int sum = 0;
-                for (size_t i = 0; i < n; i++) {
-                    sum += acc_vector[i];
+        
+        sycl::buffer<int, 1> counterBuf(sycl::range<1>(1));
+        {
+            auto counterAcc = counterBuf.get_access<sycl::access::mode::write>();
+            counterAcc[0] = 0;
+        }
+
+        q.submit([&](sycl::handler& cgh) {
+            auto affectedNodesNAcc = affectedNodesNBuf.get_access<sycl::access::mode::read>(cgh);
+            auto compactAffectedNodesNAcc = compactAffectedNodesNBuf.get_access<sycl::access::mode::read_write>(cgh);
+            auto indicesAcc = indicesBuf.get_access<sycl::access::mode::write>(cgh);
+            auto counterAcc = counterBuf.get_access<sycl::access::mode::atomic>(cgh);
+
+            cgh.parallel_for(sycl::range<1>(affectedNodesN.size()), [=](sycl::id<1> i) {
+                if (affectedNodesNAcc[i] != 0) {
+                    int index = counterAcc[0].fetch_add(1);
+                    indicesAcc[index] = i;
+                    compactAffectedNodesNAcc[index] = i;
                 }
-                acc_result[0] = sum;
             });
         });
-        q.wait_and_throw();
 
-        auto host_result = buffer_result.get_access<cl::sycl::access::mode::read>();
-        int sum = host_result[0];
+        q.wait();
 
-        //std::cout<<sum<<std::endl;
+        int nonZeroCount;
+        {
+            auto counterAcc = counterBuf.get_access<sycl::access::mode::read>();
+            nonZeroCount = counterAcc[0];
+        }
+        auto hostIndicesAcc = indicesBuf.get_access<sycl::access::mode::read>();
 
-        if (!sum)
+        if (!nonZeroCount)
             break;
-        
-        // For insertion    
+           
         {
 
             // SSSP Tree
@@ -727,9 +738,11 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
             // AffectedNodesList
             sycl::buffer<int> affectedNodesList_buf(affectedNodesList.data(), sycl::range<1>(affectedNodesList.size()));
             sycl::buffer<int> affectedNodesN_buf(affectedNodesN.data(), sycl::range<1>(affectedNodesN.size()));
+            sycl::buffer<int> compactAffectedNodesN_buf(compactAffectedNodesN.data(), sycl::range<1>(nonZeroCount));
 
             // AffectedNodesDel
             sycl::buffer<int> affectedNodesDel_buf(affectedNodesDel.data(), sycl::range<1>(affectedNodesDel.size()));
+            sycl::buffer<int> frontierSize_buf(&nonZeroCount, cl::sycl::range<1>(1));
 
 
             q.submit([&](cl::sycl::handler& cgh) 
@@ -750,74 +763,148 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
                 auto affectedNodesList_acc = affectedNodesList_buf.get_access<sycl::access::mode::read_write>(cgh);
                 auto affectedNodesN_acc = affectedNodesN_buf.get_access<sycl::access::mode::read_write>(cgh);
                 auto affectedNodesDel_acc = affectedNodesDel_buf.get_access<sycl::access::mode::read_write>(cgh);
-        
+                auto compactAffectedNodesN_acc = compactAffectedNodesN_buf.get_access<sycl::access::mode::read_write>(cgh);
+                auto hostIndicesAcc = indicesBuf.get_access<sycl::access::mode::read>();
+                auto counterAcc = counterBuf.get_access<sycl::access::mode::read>();
+                auto frontierSize_acc = frontierSize_buf.get_access<sycl::access::mode::read>();
                 
-                cgh.parallel_for<class MyKernel4>(sycl::range<1>{affectedNodesN_acc.size()}, [=](sycl::id<1> idx) 
-                {  
-                    //propagate [A(v)->n]
-                    int n = idx[0];
-                    if(affectedNodesN_acc[n] == 1)
-                    {
-                        affectedNodesN_acc[n] = 0; 
-                        int start = inDegreeColumnPointers_acc[n];
-                        int end = inDegreeColumnPointers_acc[n + 1];
+                
+        
+                // Old code
+                // cgh.parallel_for<class MyKernel4>(sycl::range<1>{affectedNodesN_acc.size()}, [=](sycl::id<1> idx) 
+                // {  
+                //     //propagate [A(v)->n]
+                //     int n = idx[0];
+                //     if(affectedNodesN_acc[n] == 1)
+                //     {
+                //         affectedNodesN_acc[n] = 0; 
+                //         int start = inDegreeColumnPointers_acc[n];
+                //         int end = inDegreeColumnPointers_acc[n + 1];
 
 
-                        for (int i = start; i < end; ++i) {
-                            int v = inDegreeRowValues_acc[i];
-                            if (affectedNodesList_acc[v] == 1)
-                            {
-                                affectedNodesList_acc[v] = 0;
-                                if (affectedNodesDel_acc[v] == 1)
-                                {
-                                    affectedNodesDel_acc[v] = 0; 
-                                    if (n + 1 == 1)
-                                        continue;
-                                    int newDistance = INT_MAX;
-                                    int newParentIndex = -1;
+                //         for (int i = start; i < end; ++i) {
+                //             int v = inDegreeRowValues_acc[i];
+                //             if (affectedNodesList_acc[v] == 1)
+                //             {
+                //                 affectedNodesList_acc[v] = 0;
+                //                 if (affectedNodesDel_acc[v] == 1)
+                //                 {
+                //                     affectedNodesDel_acc[v] = 0; 
+                //                     if (n + 1 == 1)
+                //                         continue;
+                //                     int newDistance = INT_MAX;
+                //                     int newParentIndex = -1;
 
-                                    int start = inDegreeColumnPointers_acc[n];
-                                    int end = inDegreeColumnPointers_acc[n + 1];
+                //                     int start = inDegreeColumnPointers_acc[n];
+                //                     int end = inDegreeColumnPointers_acc[n + 1];
 
-                                    for(int j = start; j < end; ++j) {
-                                        int pred = inDegreeColumnPointers_acc[j]; // This is the vertex having an edge to 'u'
-                                        int weight = inDegreeValues_acc[j]; // This is the weight of the edge from 'vertex' to 'u'
+                //                     for(int j = start; j < end; ++j) {
+                //                         int pred = inDegreeColumnPointers_acc[j]; // This is the vertex having an edge to 'u'
+                //                         int weight = inDegreeValues_acc[j]; // This is the weight of the edge from 'vertex' to 'u'
                                         
-                                        if(dist_acc[pred] + weight < newDistance )
-                                        {
-                                            newDistance = dist_acc[pred] + weight;
-                                            newParentIndex = pred; 
-                                        }
+                //                         if(dist_acc[pred] + weight < newDistance )
+                //                         {
+                //                             newDistance = dist_acc[pred] + weight;
+                //                             newParentIndex = pred; 
+                //                         }
                                         
-                                    }
+                //                     }
                                     
-                                    int oldParent = parent_acc[n];
-                                    if (newParentIndex == -1)
-                                    {
-                                        parent_acc[n] = -1; 
-                                        dist_acc[n] = INT_MAX; 
-                                    }
-                                    else
-                                    {
-                                        dist_acc[n] = newDistance;
-                                        parent_acc[n] = newParentIndex;
-                                        affectedNodesDel_acc[n] = 1;
-                                    }
-                                }
-                                int w = inDegreeValues_acc[n];
-                                int start = inDegreeColumnPointers_acc[n];
-                                int end = inDegreeColumnPointers_acc[n + 1];
+                //                     int oldParent = parent_acc[n];
+                //                     if (newParentIndex == -1)
+                //                     {
+                //                         parent_acc[n] = -1; 
+                //                         dist_acc[n] = INT_MAX; 
+                //                     }
+                //                     else
+                //                     {
+                //                         dist_acc[n] = newDistance;
+                //                         parent_acc[n] = newParentIndex;
+                //                         affectedNodesDel_acc[n] = 1;
+                //                     }
+                //                 }
+                //                 int w = inDegreeValues_acc[n];
+                //                 int start = inDegreeColumnPointers_acc[n];
+                //                 int end = inDegreeColumnPointers_acc[n + 1];
 
-                                for (int k = start; k < end; ++k) {
-                                    int v = inDegreeRowValues_acc[k];
-                                    affectedNodesList_acc[v] = 0;
-                                    int alt = dist_acc[v] + inDegreeRowValues_acc[i];
-                                    if (alt < dist_acc[n]) {
-                                        dist_acc[n] = alt;
-                                        parent_acc[n] = v;
-                                        affectedNodesList_acc[n] = 1; 
-                                    }
-                                }
+                //                 for (int k = start; k < end; ++k) {
+                //                     int v = inDegreeRowValues_acc[k];
+                //                     affectedNodesList_acc[v] = 0;
+                //                     int alt = dist_acc[v] + inDegreeRowValues_acc[i];
+                //                     if (alt < dist_acc[n]) {
+                //                         dist_acc[n] = alt;
+                //                         parent_acc[n] = v;
+                //                         affectedNodesList_acc[n] = 1; 
+                //                     }
+                //                 }
+                //             }
+                //         }
+                //     }
+
+                // });
+
+
+
+                cgh.parallel_for<class MyKernel4>(sycl::range<1>{frontierSize_acc.size()}, [=](sycl::id<1> idx) 
+                {   
+                    //propagate [A(v)->n]
+                    int n = hostIndicesAcc[idx[0]];
+
+
+                    affectedNodesN_acc[n] = 0; 
+                    int start = inDegreeColumnPointers_acc[n];
+                    int end = inDegreeColumnPointers_acc[n + 1];
+
+                    int newDistance = INT_MAX;
+                    int newParentIndex = -1; 
+
+                    int flag = 0;
+                    // Scan for each potential parents
+                    for (int i = start; i < end; ++i) {
+
+                        int v = inDegreeRowValues_acc[i];
+
+                        //Avoid deletion of root 
+                        if (n + 1 == 1)
+                            continue;
+
+
+                        int pred = inDegreeColumnPointers_acc[i]; 
+                        int weight = v; 
+                        
+                        if(dist_acc[pred] + weight != newDistance )
+                        {
+                            if (INT_MAX - weight >= newDistance)
+                            {
+                                // Infinite Loop: Edge case detected
+                                return;
+                            }
+                            newDistance = dist_acc[pred] + weight;
+                            newParentIndex = pred; 
+                            flag = 1; 
+                        }
+                            
+                        
+                        int oldParent = parent_acc[n];
+                        if (newParentIndex == -1)
+                        {
+                            parent_acc[n] = -1; 
+                            dist_acc[n] = INT_MAX; 
+                        }
+                        else
+                        {
+                            dist_acc[n] = newDistance;
+                            parent_acc[n] = newParentIndex;
+                        }
+
+                        if (flag == 1)
+                        {
+                            int start = sssp_row_pointers_acc[n];
+                            int end = sssp_row_pointers_acc[n + 1]; 
+
+                            for (int i = start; i < end; ++i) {
+
+                                affectedNodesN_acc[sssp_column_indices_acc[i]] = 1;
                             }
                         }
                     }
@@ -827,14 +914,23 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
             q.wait_and_throw();
         }
     }
+    std::cout << "Distance After" <<std::endl;
+    for (int i = 0; i < dist.size(); i++) {
+        std::cout <<dist[i]<< " ";
+    }
+    std::cout<<std::endl;
+
+    std::cout << "Parent After " <<std::endl;
+    for (int i = 0; i < parent.size(); i++) {
+        std::cout <<parent[i]<< " ";
+    }
+    std::cout<<std::endl;
+    }
 
 }
 
 
-void dijkstra(const std::vector<int>& values, const std::vector<int>& column_indices, 
-              const std::vector<int>& row_pointers, int src,
-              std::vector<int>& dist, std::vector<int>& parent)
-{
+void dijkstra(const std::vector<int>& values, const std::vector<int>& column_indices, const std::vector<int>& row_pointers, int src, std::vector<int>& dist, std::vector<int>& parent){
     // Initialize the distance vector
     int n = row_pointers.size() - 1;
     dist.resize(n, std::numeric_limits<int>::max());
@@ -1007,7 +1103,7 @@ int main() {
     auto originalGraph = readMTX("sorted_graph.mtx");
 
     int numVertices = row_pointers.size() - 1;  // Should be determined from the MTX file or another source
-    int numChanges = 1;
+    int numChanges = 5;
     int minWeight = 1;
     int maxWeight = 10;
 
@@ -1039,4 +1135,4 @@ int main() {
     return 0;
 }
 
-//clang++ -std=c++17 mtx2CSR.cpp  && ./a.out
+// To run, clang++ -fsycl -fsycl-targets=nvptx64-nvidia-cuda SYCL_Final.cpp -o SYCL_Final && ./SYCL_Final
