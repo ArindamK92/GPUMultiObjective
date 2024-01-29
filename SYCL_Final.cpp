@@ -863,7 +863,7 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
                         
                         if(dist_acc[pred] + weight != newDistance )
                         {
-                            if (INT_MAX - weight >= newDistance)
+                            if (INT_MAX - weight >= dist_acc[pred] + weight)
                             {
                                 // Infinite Loop: Edge case detected
                                 return;
