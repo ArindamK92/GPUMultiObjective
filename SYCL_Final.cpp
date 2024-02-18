@@ -75,21 +75,19 @@ class UpdateWeightsKernel;
 
 void updateWeights(std::vector<Edge>& edges, const std::vector<double>& Pref) {
 
-    cl::sycl::queue q(cl::sycl::gpu_selector_v);
-
+    queue q(gpu_selector{});
 
     buffer<Edge, 1> edges_buf(edges.data(), range<1>(edges.size()));
     buffer<double, 1> pref_buf(Pref.data(), range<1>(Pref.size()));
 
-
     q.submit([&](handler& cgh) {
-
-        auto edges_acc = edges_buf.get_access<access::mode::read_write>(cgh);
-        auto pref_acc = pref_buf.get_access<access::mode::read>(cgh);
-
+        auto edges_acc = edges_buf.get_access<access::mode::atomic>(cgh);
 
         cgh.parallel_for<UpdateWeightsKernel>(range<1>(edges.size()), [=](id<1> idx) {
-            edges_acc[idx].weight = static_cast<float>(-1/2.0);
+
+            auto atomicWeight = atomic_ref<int, memory_order::relaxed, memory_scope::device, access::address_space::global_space>(reinterpret_cast<int&>(edges_acc[idx].weight));
+
+            atomicWeight.fetch_sub(1); 
         });
     });
 
