@@ -79,7 +79,7 @@ bool bellmanFord(const Graph& graph, int source, std::unordered_map<int, int>& d
 
     // Initialize distances
     for (const auto& [node, _] : graph) {
-        distances[node+1] = std::numeric_limits<int>::max();
+        distances[node+1] = std::numeric_limits<double>::infinity();
     }
     distances[source] = 0;
 
@@ -91,7 +91,7 @@ bool bellmanFord(const Graph& graph, int source, std::unordered_map<int, int>& d
             int u = it->first;
             const auto& neighbors = it->second;
             for (const auto& [v, weight] : neighbors) {
-                if (distances[u] != std::numeric_limits<int>::max() && distances[u] + weight < distances[v]) {
+                if (!std::isinf(distances[u]) && distances[u] + weight < distances[v]) {
                     #pragma omp critical
                     {
                         if (distances[u] + weight < distances[v]) {
@@ -108,7 +108,7 @@ bool bellmanFord(const Graph& graph, int source, std::unordered_map<int, int>& d
     // Check for negative-weight cycles
     for (const auto& [u, neighbors] : graph) {
         for (const auto& [v, weight] : neighbors) {
-            if (distances[u] != std::numeric_limits<int>::max() && distances[u] + weight < distances[v]) {
+            if (!std::isinf(distances[u]) && distances[u] + weight < distances[v]) {
                 return false;  // Graph contains a negative-weight cycle
             }
         }
