@@ -76,6 +76,12 @@ std::vector<Edge> constructGraph(const std::vector<Tree*>& trees, int k) {
 
 
 void updateWeights(std::vector<Edge>& edges, std::vector<int>& Pref, int k) {
+    
+    auto startMOSP = std::chrono::high_resolution_clock::now();
+
+
+    
+
     cl::sycl::queue q(cl::sycl::default_selector{});
     const size_t size = edges.size();
 
@@ -116,10 +122,19 @@ void updateWeights(std::vector<Edge>& edges, std::vector<int>& Pref, int k) {
         });
     });
 
+    auto stopMOSP = std::chrono::high_resolution_clock::now();
+    auto durationMOSP = std::chrono::duration_cast<std::chrono::seconds>(stopMOSP - startMOSP);
+
     q.wait();
 }
 
 void parallelBellmanFord(std::vector<Edge>& edges, int numVertices, int source, std::vector<int>& parents) {
+    
+    auto startBell = std::chrono::high_resolution_clock::now();
+
+
+    
+    
     // Initialize distances to infinity, except for the source vertex
     std::vector<float> distances(numVertices, std::numeric_limits<float>::max());
     distances[source] = 0.0f;
@@ -160,6 +175,10 @@ void parallelBellmanFord(std::vector<Edge>& edges, int numVertices, int source, 
         // Wait for the queue to finish processing
         q.wait();
     }
+    auto stopBell = std::chrono::high_resolution_clock::now();
+
+
+    auto durationBell = std::chrono::duration_cast<std::chrono::seconds>(stopBell - startBell);
 }
 
 
@@ -509,18 +528,8 @@ void markSubtreeAffected(const std::vector<int>& outDegreeValues,
 void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& new_graph_column_indices,  std::vector<int>& new_graph_row_pointers, 
                          std::vector<int>& outDegreeValues,  std::vector<int>& outDegreeIndices,  std::vector<int>& outDegreePointers,
                         std::vector<int>& dist, std::vector<int>& parent , std::vector<int>& inDegreeValues, std::vector<int>& inDegreeColumnPointers, std::vector<int>& inDegreeRowValues) {
-    
-    std::cout << "Distance Before" <<std::endl;
-    for (int i = 0; i < dist.size(); i++) {
-        std::cout <<dist[i]<< " ";
-    }
-    std::cout<<std::endl;
 
-    std::cout << "Parent Before " <<std::endl;
-    for (int i = 0; i < parent.size(); i++) {
-        std::cout <<parent[i]<< " ";
-    }
-    std::cout<<std::endl;
+    auto startSOSPPart1 = std::chrono::high_resolution_clock::now();
 
     
     std::vector<int> t_insert_values, t_insert_row_indices, t_insert_column_pointers;
@@ -744,9 +753,13 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
         });
         q.wait_and_throw();
 
-        
+    
+    auto stopSOSPPart1 = std::chrono::high_resolution_clock::now();
 
 
+    auto durationSOSPPart1 = std::chrono::duration_cast<std::chrono::seconds>(stopSOSPPart1 - startSOSPPart1);
+
+    auto startSOSPPart2 = std::chrono::high_resolution_clock::now();
 
     while(1)
     {
@@ -914,17 +927,12 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
             q.wait_and_throw();
         }
     }
-    std::cout << "Distance After" <<std::endl;
-    for (int i = 0; i < dist.size(); i++) {
-        std::cout <<dist[i]<< " ";
-    }
-    std::cout<<std::endl;
 
-    std::cout << "Parent After " <<std::endl;
-    for (int i = 0; i < parent.size(); i++) {
-        std::cout <<parent[i]<< " ";
-    }
-    std::cout<<std::endl;
+    auto stopSOSPPart2 = std::chrono::high_resolution_clock::now();
+
+
+    auto durationSOSPPart2 = std::chrono::duration_cast<std::chrono::seconds>(stopSOSPPart2 - startSOSPPart2);
+
     }
 
 }
@@ -1283,3 +1291,5 @@ int main() {
 }
 
 // To run, clang++ -fsycl -fsycl-targets=nvptx64-nvidia-cuda SYCL_Final.cpp -o SYCL_Final && ./SYCL_Final
+
+    
