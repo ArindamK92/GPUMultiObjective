@@ -1269,10 +1269,6 @@ int main() {
     }
     updateWeights(edges, Pref, k);
 
-    for (const auto& edge : edges) {
-        std::cout << "Edge from " << edge.u << " to " << edge.v << " with updated weight " << edge.weight << std::endl;
-    }
-
     parallelBellmanFord(edges, numVertices, 0);
     
     return 0;
