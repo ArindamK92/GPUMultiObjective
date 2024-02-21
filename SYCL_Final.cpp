@@ -119,14 +119,19 @@ void updateWeights(std::vector<Edge>& edges, std::vector<int>& Pref, int k) {
     q.wait();
 }
 
-void parallelBellmanFord(std::vector<Edge>& edges, int numVertices, int source) {
+void parallelBellmanFord(std::vector<Edge>& edges, int numVertices, int source, std::vector<int>& parents) {
     // Initialize distances to infinity, except for the source vertex
     std::vector<float> distances(numVertices, std::numeric_limits<float>::max());
     distances[source] = 0.0f;
 
-    // Create buffers for edges and distances
+    // Initialize parent array with -1, indicating no parent initially
+    parents.assign(numVertices, -1);
+    parents[source] = source; // The source is its own parent
+
+    // Create buffers for edges, distances, and parents
     cl::sycl::buffer<Edge, 1> edges_buf(edges.data(), cl::sycl::range<1>(edges.size()));
     cl::sycl::buffer<float, 1> distances_buf(distances.data(), cl::sycl::range<1>(distances.size()));
+    cl::sycl::buffer<int, 1> parents_buf(parents.data(), cl::sycl::range<1>(parents.size()));
 
     // SYCL queue for executing kernels
     cl::sycl::queue q(cl::sycl::default_selector{});
@@ -137,14 +142,17 @@ void parallelBellmanFord(std::vector<Edge>& edges, int numVertices, int source) 
         q.submit([&](cl::sycl::handler& cgh) {
             auto edges_acc = edges_buf.get_access<cl::sycl::access::mode::read>(cgh);
             auto dist_acc = distances_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+            auto parents_acc = parents_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
 
             cgh.parallel_for<class relax_edges>(cl::sycl::range<1>(edges.size()), [=](cl::sycl::id<1> idx) {
                 int u = edges_acc[idx].u;
                 int v = edges_acc[idx].v;
                 float weight = edges_acc[idx].weight;
 
+                // Perform relaxation and update parent if a shorter path is found
                 if (dist_acc[u] != std::numeric_limits<float>::max() && dist_acc[u] + weight < dist_acc[v]) {
                     dist_acc[v] = dist_acc[u] + weight; // Relax the edge
+                    parents_acc[v] = u; // Update parent
                 }
             });
         });
@@ -152,7 +160,6 @@ void parallelBellmanFord(std::vector<Edge>& edges, int numVertices, int source) 
         // Wait for the queue to finish processing
         q.wait();
     }
-
 }
 
 
@@ -1269,7 +1276,8 @@ int main() {
     }
     updateWeights(edges, Pref, k);
 
-    parallelBellmanFord(edges, numVertices, 0);
+    std::vector<int> finalParents;
+    parallelBellmanFord(edges, numVertices, 0, finalParents);
     
     return 0;
 }
