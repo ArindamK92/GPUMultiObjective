@@ -14,6 +14,8 @@ struct Edge {
     int u;
     int v;
     float weight;
+    int whichTree;
+    Edge(int u, int v, float weight, int whichTree) : u(u), v(v), weight(weight), whichTree(whichTree) {}
 };
 
 class Tree {
@@ -49,12 +51,12 @@ public:
     }
 };
 // Function to add an edge to the graph
-void addEdge(std::vector<Edge>& edges, int u, int v, double pref) {
-    edges.push_back({u, v, static_cast<float>(pref)});
+void addEdge(std::vector<Edge>& edges, int u, int v, double pref, int index) {
+    edges.push_back({u, v, static_cast<float>(pref), index});
 }
 
 // Function to construct the graph
-std::vector<Edge> constructGraph(const std::vector<Tree*>& trees, const std::vector<double>& Pref) {
+std::vector<Edge> constructGraph(const std::vector<Tree*>& trees, int k) {
     std::vector<Edge> edges;
 
     for (size_t index = 0; index < trees.size(); ++index) {
@@ -63,7 +65,7 @@ std::vector<Edge> constructGraph(const std::vector<Tree*>& trees, const std::vec
 
         for (int i = 1; i < parents.size(); ++i) {
             if (parents[i] != 0) {
-                addEdge(edges, parents[i], i, Pref[index]);
+                addEdge(edges, parents[i], i, k, index);
             }
         }
     }
@@ -71,28 +73,90 @@ std::vector<Edge> constructGraph(const std::vector<Tree*>& trees, const std::vec
     return edges;
 }
 
-class UpdateWeightsKernel;
 
-void updateWeights(std::vector<Edge>& edges, const std::vector<double>& Pref) {
 
-    queue q(gpu_selector{});
+void updateWeights(std::vector<Edge>& edges, std::vector<int>& Pref, int k) {
+    cl::sycl::queue q(cl::sycl::default_selector{});
+    const size_t size = edges.size();
 
-    buffer<Edge, 1> edges_buf(edges.data(), range<1>(edges.size()));
-    buffer<double, 1> pref_buf(Pref.data(), range<1>(Pref.size()));
+    // Correctly initialized buffers
+    cl::sycl::buffer<Edge, 1> edges_buf(edges.data(), cl::sycl::range<1>(size));
+    cl::sycl::buffer<int, 1> weights_buf((cl::sycl::range<1>(size)));
+    cl::sycl::buffer<int, 1> index_buf((cl::sycl::range<1>(size))); 
+    cl::sycl::buffer<int, 1> pref_buf(Pref.data(), cl::sycl::range<1>(Pref.size()));
 
-    q.submit([&](handler& cgh) {
-        auto edges_acc = edges_buf.get_access<access::mode::atomic>(cgh);
 
-        cgh.parallel_for<UpdateWeightsKernel>(range<1>(edges.size()), [=](id<1> idx) {
+    // Step 1: Parallel copy of weights from edges to weights buffer
+    q.submit([&](cl::sycl::handler& cgh) {
+        auto e_acc = edges_buf.get_access<cl::sycl::access::mode::read>(cgh);
+        auto w_acc = weights_buf.get_access<cl::sycl::access::mode::discard_write>(cgh);
+        auto i_acc = index_buf.get_access<cl::sycl::access::mode::discard_write>(cgh);
+        cgh.parallel_for<class copy_weights_kernel>(cl::sycl::range<1>(size), [=](cl::sycl::id<1> idx) {
+            w_acc[idx] = e_acc[idx].weight;
+            i_acc[idx] = e_acc[idx].whichTree;
+        });
+    });
 
-            auto atomicWeight = atomic_ref<int, memory_order::relaxed, memory_scope::device, access::address_space::global_space>(reinterpret_cast<int&>(edges_acc[idx].weight));
+    // Step 2: Perform atomic subtraction on weights
+    q.submit([&](cl::sycl::handler& cgh) {
+        auto acc = weights_buf.get_access<cl::sycl::access::mode::atomic>(cgh);
+        auto i_acc = index_buf.get_access<cl::sycl::access::mode::discard_write>(cgh);
+        auto pref_acc = pref_buf.get_access<cl::sycl::access::mode::read>(cgh);
+        cgh.parallel_for<class sub_weights_kernel>(cl::sycl::range<1>(size), [=](cl::sycl::id<1> idx) {
+            acc[idx].fetch_sub(1/pref_acc[i_acc[idx]]);
+        });
+    });
 
-            atomicWeight.fetch_sub(1); 
+    // Step 3: Parallel update of original edges with new weights
+    q.submit([&](cl::sycl::handler& cgh) {
+        auto e_acc = edges_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+        auto w_acc = weights_buf.get_access<cl::sycl::access::mode::read>(cgh);
+        cgh.parallel_for<class update_edges_kernel>(cl::sycl::range<1>(size), [=](cl::sycl::id<1> idx) {
+            e_acc[idx].weight = w_acc[idx];
         });
     });
 
     q.wait();
 }
+
+void parallelBellmanFord(std::vector<Edge>& edges, int numVertices, int source) {
+    // Initialize distances to infinity, except for the source vertex
+    std::vector<float> distances(numVertices, std::numeric_limits<float>::max());
+    distances[source] = 0.0f;
+
+    // Create buffers for edges and distances
+    cl::sycl::buffer<Edge, 1> edges_buf(edges.data(), cl::sycl::range<1>(edges.size()));
+    cl::sycl::buffer<float, 1> distances_buf(distances.data(), cl::sycl::range<1>(distances.size()));
+
+    // SYCL queue for executing kernels
+    cl::sycl::queue q(cl::sycl::default_selector{});
+
+    // Main loop of the Bellman-Ford algorithm, executed V-1 times
+    for (int i = 0; i < numVertices - 1; ++i) {
+        // Submit a task for parallel edge relaxation
+        q.submit([&](cl::sycl::handler& cgh) {
+            auto edges_acc = edges_buf.get_access<cl::sycl::access::mode::read>(cgh);
+            auto dist_acc = distances_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+
+            cgh.parallel_for<class relax_edges>(cl::sycl::range<1>(edges.size()), [=](cl::sycl::id<1> idx) {
+                int u = edges_acc[idx].u;
+                int v = edges_acc[idx].v;
+                float weight = edges_acc[idx].weight;
+
+                if (dist_acc[u] != std::numeric_limits<float>::max() && dist_acc[u] + weight < dist_acc[v]) {
+                    dist_acc[v] = dist_acc[u] + weight; // Relax the edge
+                }
+            });
+        });
+
+        // Wait for the queue to finish processing
+        q.wait();
+    }
+
+}
+
+
+
 //Done
 void printCSRRepresentation(const std::vector<int>& values, const std::vector<int>& column_indices, const std::vector<int>& row_pointers) {
     std::cout << "CSR representation of the Graph:\n";
@@ -397,9 +461,9 @@ std::vector<std::vector<int>> find_outgoing_connections(
 }
 
 // Need to remove recursion
-void markSubtreeAffected(const std::vector<int>& sssp_values, 
-                         const std::vector<int>& sssp_column_indices, 
-                         const std::vector<int>& sssp_row_pointers, 
+void markSubtreeAffected(const std::vector<int>& outDegreeValues, 
+                         const std::vector<int>& outDegreeIndices, 
+                         const std::vector<int>& outDegreePointers, 
                          std::vector<int>& dist, 
                          std::vector<bool>& isAffectedForDeletion, 
                          std::queue<int>& affectedNodesForDeletion, 
@@ -410,16 +474,16 @@ void markSubtreeAffected(const std::vector<int>& sssp_values,
     affectedNodesForDeletion.push(node);
   
     // Get the start and end pointers for the row in CSR representation
-    int start = sssp_row_pointers[node]; // Already 1-indexed
-    int end = sssp_row_pointers[node + 1]; // Already 1-indexed
+    int start = outDegreePointers[node]; // Already 1-indexed
+    int end = outDegreePointers[node + 1]; // Already 1-indexed
 
     // Traverse the CSR to find the children of the current node
     for (int i = start; i < end; ++i) {
-        int child = sssp_column_indices[i]; // Already 1-indexed
+        int child = outDegreeIndices[i]; // Already 1-indexed
         //std::cout<< child << " "<<std::endl;
         // If this child node is not already marked as affected, call the function recursively
         if (!isAffectedForDeletion[child]) {
-            markSubtreeAffected(sssp_values, sssp_column_indices, sssp_row_pointers, dist, isAffectedForDeletion, affectedNodesForDeletion, child);
+            markSubtreeAffected(outDegreeValues, outDegreeIndices, outDegreePointers, dist, isAffectedForDeletion, affectedNodesForDeletion, child);
         }
     }
 }
@@ -436,9 +500,20 @@ void markSubtreeAffected(const std::vector<int>& sssp_values,
 
 
 void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& new_graph_column_indices,  std::vector<int>& new_graph_row_pointers, 
-                         std::vector<int>& sssp_values,  std::vector<int>& sssp_column_indices,  std::vector<int>& sssp_row_pointers,
+                         std::vector<int>& outDegreeValues,  std::vector<int>& outDegreeIndices,  std::vector<int>& outDegreePointers,
                         std::vector<int>& dist, std::vector<int>& parent , std::vector<int>& inDegreeValues, std::vector<int>& inDegreeColumnPointers, std::vector<int>& inDegreeRowValues) {
     
+    std::cout << "Distance Before" <<std::endl;
+    for (int i = 0; i < dist.size(); i++) {
+        std::cout <<dist[i]<< " ";
+    }
+    std::cout<<std::endl;
+
+    std::cout << "Parent Before " <<std::endl;
+    for (int i = 0; i < parent.size(); i++) {
+        std::cout <<parent[i]<< " ";
+    }
+    std::cout<<std::endl;
 
     
     std::vector<int> t_insert_values, t_insert_row_indices, t_insert_column_pointers;
@@ -446,9 +521,9 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
     std::vector<int> t_delete_values, t_delete_row_indices, t_delete_column_pointers;
     readMTXToTransposeCSR("changed_edges.mtx", t_delete_values, t_delete_row_indices, t_delete_column_pointers, 2); // Delete mode 2
 
-    std::vector<int> affectedNodesList(sssp_row_pointers.size(), 0);
-    std::vector<int> affectedNodesN(sssp_row_pointers.size(), 0);
-    std::vector<int> affectedNodesDel(sssp_row_pointers.size(), 0);
+    std::vector<int> affectedNodesList(outDegreePointers.size(), 0);
+    std::vector<int> affectedNodesN(outDegreePointers.size(), 0);
+    std::vector<int> affectedNodesDel(outDegreePointers.size(), 0);
 
 
     cl::sycl::queue q(cl::sycl::gpu_selector_v);
@@ -461,9 +536,9 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
         cl::sycl::buffer t_insert_values_buf(t_insert_values.data(), cl::sycl::range<1>(t_insert_values.size()));
 
         // SSSP Tree
-        cl::sycl::buffer sssp_values_buf(sssp_values.data(), cl::sycl::range<1>(sssp_values.size()));
-        cl::sycl::buffer sssp_column_indices_buf(sssp_column_indices.data(), cl::sycl::range<1>(sssp_column_indices.size()));
-        cl::sycl::buffer sssp_row_pointers_buf(sssp_row_pointers.data(), cl::sycl::range<1>(sssp_row_pointers.size()));
+        cl::sycl::buffer outDegreeValues_buf(outDegreeValues.data(), cl::sycl::range<1>(outDegreeValues.size()));
+        cl::sycl::buffer outDegreeIndices_buf(outDegreeIndices.data(), cl::sycl::range<1>(outDegreeIndices.size()));
+        cl::sycl::buffer outDegreePointers_buf(outDegreePointers.data(), cl::sycl::range<1>(outDegreePointers.size()));
 
         // Distance
         cl::sycl::buffer dist_buf(dist.data(), cl::sycl::range<1>(dist.size()));
@@ -481,9 +556,9 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
             auto t_insert_row_indices_acc = t_insert_row_indices_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
             auto t_insert_values_acc = t_insert_values_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
             
-            auto sssp_values_acc = sssp_values_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
-            auto sssp_column_indices_acc = sssp_column_indices_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
-            auto sssp_row_pointers_acc = sssp_row_pointers_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+            auto outDegreeValues_acc = outDegreeValues_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+            auto outDegreeIndices_acc = outDegreeIndices_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+            auto outDegreePointers_acc = outDegreePointers_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
             
             auto dist_acc = dist_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
             auto parent_acc = parent_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
@@ -523,9 +598,9 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
         cl::sycl::buffer t_delete_values_buf(t_delete_values.data(), cl::sycl::range<1>(t_delete_values.size()));
 
         // SSSP Tree
-        cl::sycl::buffer sssp_values_buf(sssp_values.data(), cl::sycl::range<1>(sssp_values.size()));
-        cl::sycl::buffer sssp_column_indices_buf(sssp_column_indices.data(), cl::sycl::range<1>(sssp_column_indices.size()));
-        cl::sycl::buffer sssp_row_pointers_buf(sssp_row_pointers.data(), cl::sycl::range<1>(sssp_row_pointers.size()));
+        cl::sycl::buffer outDegreeValues_buf(outDegreeValues.data(), cl::sycl::range<1>(outDegreeValues.size()));
+        cl::sycl::buffer outDegreeIndices_buf(outDegreeIndices.data(), cl::sycl::range<1>(outDegreeIndices.size()));
+        cl::sycl::buffer outDegreePointers_buf(outDegreePointers.data(), cl::sycl::range<1>(outDegreePointers.size()));
 
         cl::sycl::buffer inDegreeValues_buf(inDegreeValues.data(), cl::sycl::range<1>(inDegreeValues.size()));
         cl::sycl::buffer inDegreeColumnPointers_buf(inDegreeColumnPointers.data(), cl::sycl::range<1>(inDegreeColumnPointers.size()));
@@ -549,9 +624,9 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
             auto t_delete_row_indices_acc = t_delete_row_indices_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
             auto t_delete_values_acc = t_delete_values_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
             
-            auto sssp_values_acc = sssp_values_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
-            auto sssp_column_indices_acc = sssp_column_indices_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
-            auto sssp_row_pointers_acc = sssp_row_pointers_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+            auto outDegreeValues_acc = outDegreeValues_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+            auto outDegreeIndices_acc = outDegreeIndices_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+            auto outDegreePointers_acc = outDegreePointers_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
 
             auto inDegreeValues_acc = inDegreeValues_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
             auto inDegreeColumnPointers_acc = inDegreeColumnPointers_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
@@ -623,9 +698,9 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
     // Find the neighbors of effected nodes
     {
         // SSSP Tree
-        cl::sycl::buffer sssp_values_buf(sssp_values.data(), cl::sycl::range<1>(sssp_values.size()));
-        cl::sycl::buffer sssp_column_indices_buf(sssp_column_indices.data(), cl::sycl::range<1>(sssp_column_indices.size()));
-        cl::sycl::buffer sssp_row_pointers_buf(sssp_row_pointers.data(), cl::sycl::range<1>(sssp_row_pointers.size()));
+        cl::sycl::buffer outDegreeValues_buf(outDegreeValues.data(), cl::sycl::range<1>(outDegreeValues.size()));
+        cl::sycl::buffer outDegreeIndices_buf(outDegreeIndices.data(), cl::sycl::range<1>(outDegreeIndices.size()));
+        cl::sycl::buffer outDegreePointers_buf(outDegreePointers.data(), cl::sycl::range<1>(outDegreePointers.size()));
 
         // AffectedNodesList
         sycl::buffer<int> affectedNodesList_buf(affectedNodesList.data(), sycl::range<1>(affectedNodesList.size()));
@@ -635,9 +710,9 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
         q.submit([&](cl::sycl::handler& cgh) 
         {
             
-            auto sssp_values_acc = sssp_values_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
-            auto sssp_column_indices_acc = sssp_column_indices_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
-            auto sssp_row_pointers_acc = sssp_row_pointers_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+            auto outDegreeValues_acc = outDegreeValues_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+            auto outDegreeIndices_acc = outDegreeIndices_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+            auto outDegreePointers_acc = outDegreePointers_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
 
 
             auto affectedNodesList_acc = affectedNodesList_buf.get_access<sycl::access::mode::read_write>(cgh);
@@ -645,13 +720,18 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
             
              cgh.parallel_for<class MyKernel3>(sycl::range<1>{affectedNodesList_acc.size()}, [=](sycl::id<1> idx) 
              {
+                
                 int u = idx[0];
-                int start = sssp_row_pointers_acc[u];
-                int end = sssp_row_pointers_acc[u + 1];
-                for (int i = start; i < end; ++i) {
-                    int v = sssp_column_indices_acc[i];
-                    affectedNodesN_acc[v] = 1; 
+                if (affectedNodesList_acc[u] == 1)
+                {
+                    int start = outDegreePointers_acc[u];
+                    int end = outDegreePointers_acc[u + 1];
+                    for (int i = start; i < end; ++i) {
+                        int v = outDegreeIndices_acc[i];
+                        affectedNodesN_acc[v] = 1; 
+                    }
                 }
+                
 
             });
         });
@@ -708,9 +788,9 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
         {
 
             // SSSP Tree
-            cl::sycl::buffer sssp_values_buf(sssp_values.data(), cl::sycl::range<1>(sssp_values.size()));
-            cl::sycl::buffer sssp_column_indices_buf(sssp_column_indices.data(), cl::sycl::range<1>(sssp_column_indices.size()));
-            cl::sycl::buffer sssp_row_pointers_buf(sssp_row_pointers.data(), cl::sycl::range<1>(sssp_row_pointers.size()));
+            cl::sycl::buffer outDegreeValues_buf(outDegreeValues.data(), cl::sycl::range<1>(outDegreeValues.size()));
+            cl::sycl::buffer outDegreeIndices_buf(outDegreeIndices.data(), cl::sycl::range<1>(outDegreeIndices.size()));
+            cl::sycl::buffer outDegreePointers_buf(outDegreePointers.data(), cl::sycl::range<1>(outDegreePointers.size()));
 
             cl::sycl::buffer inDegreeValues_buf(inDegreeValues.data(), cl::sycl::range<1>(inDegreeValues.size()));
             cl::sycl::buffer inDegreeColumnPointers_buf(inDegreeColumnPointers.data(), cl::sycl::range<1>(inDegreeColumnPointers.size()));
@@ -735,9 +815,9 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
             q.submit([&](cl::sycl::handler& cgh) 
             {
                 
-                auto sssp_values_acc = sssp_values_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
-                auto sssp_column_indices_acc = sssp_column_indices_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
-                auto sssp_row_pointers_acc = sssp_row_pointers_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+                auto outDegreeValues_acc = outDegreeValues_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+                auto outDegreeIndices_acc = outDegreeIndices_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
+                auto outDegreePointers_acc = outDegreePointers_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
                 
                 auto inDegreeValues_acc = inDegreeValues_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
                 auto inDegreeColumnPointers_acc = inDegreeColumnPointers_buf.get_access<cl::sycl::access::mode::read_write>(cgh);
@@ -755,80 +835,6 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
                 auto counterAcc = counterBuf.get_access<sycl::access::mode::read>();
                 auto frontierSize_acc = frontierSize_buf.get_access<sycl::access::mode::read>();
                 
-                
-        
-                // Old code
-                // cgh.parallel_for<class MyKernel4>(sycl::range<1>{affectedNodesN_acc.size()}, [=](sycl::id<1> idx) 
-                // {  
-                //     //propagate [A(v)->n]
-                //     int n = idx[0];
-                //     if(affectedNodesN_acc[n] == 1)
-                //     {
-                //         affectedNodesN_acc[n] = 0; 
-                //         int start = inDegreeColumnPointers_acc[n];
-                //         int end = inDegreeColumnPointers_acc[n + 1];
-
-
-                //         for (int i = start; i < end; ++i) {
-                //             int v = inDegreeRowValues_acc[i];
-                //             if (affectedNodesList_acc[v] == 1)
-                //             {
-                //                 affectedNodesList_acc[v] = 0;
-                //                 if (affectedNodesDel_acc[v] == 1)
-                //                 {
-                //                     affectedNodesDel_acc[v] = 0; 
-                //                     if (n + 1 == 1)
-                //                         continue;
-                //                     int newDistance = INT_MAX;
-                //                     int newParentIndex = -1;
-
-                //                     int start = inDegreeColumnPointers_acc[n];
-                //                     int end = inDegreeColumnPointers_acc[n + 1];
-
-                //                     for(int j = start; j < end; ++j) {
-                //                         int pred = inDegreeColumnPointers_acc[j]; // This is the vertex having an edge to 'u'
-                //                         int weight = inDegreeValues_acc[j]; // This is the weight of the edge from 'vertex' to 'u'
-                                        
-                //                         if(dist_acc[pred] + weight < newDistance )
-                //                         {
-                //                             newDistance = dist_acc[pred] + weight;
-                //                             newParentIndex = pred; 
-                //                         }
-                                        
-                //                     }
-                                    
-                //                     int oldParent = parent_acc[n];
-                //                     if (newParentIndex == -1)
-                //                     {
-                //                         parent_acc[n] = -1; 
-                //                         dist_acc[n] = INT_MAX; 
-                //                     }
-                //                     else
-                //                     {
-                //                         dist_acc[n] = newDistance;
-                //                         parent_acc[n] = newParentIndex;
-                //                         affectedNodesDel_acc[n] = 1;
-                //                     }
-                //                 }
-                //                 int w = inDegreeValues_acc[n];
-                //                 int start = inDegreeColumnPointers_acc[n];
-                //                 int end = inDegreeColumnPointers_acc[n + 1];
-
-                //                 for (int k = start; k < end; ++k) {
-                //                     int v = inDegreeRowValues_acc[k];
-                //                     affectedNodesList_acc[v] = 0;
-                //                     int alt = dist_acc[v] + inDegreeRowValues_acc[i];
-                //                     if (alt < dist_acc[n]) {
-                //                         dist_acc[n] = alt;
-                //                         parent_acc[n] = v;
-                //                         affectedNodesList_acc[n] = 1; 
-                //                     }
-                //                 }
-                //             }
-                //         }
-                //     }
-
-                // });
 
 
 
@@ -861,7 +867,7 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
                         
                         if(dist_acc[pred] + weight != newDistance )
                         {
-                            if (INT_MAX - weight >= dist_acc[pred] + weight)
+                            if (INT_MAX - weight >= newDistance)
                             {
                                 // Infinite Loop: Edge case detected
                                 return;
@@ -886,12 +892,12 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
 
                         if (flag == 1)
                         {
-                            int start = sssp_row_pointers_acc[n];
-                            int end = sssp_row_pointers_acc[n + 1]; 
+                            int start = outDegreePointers_acc[n];
+                            int end = outDegreePointers_acc[n + 1]; 
 
                             for (int i = start; i < end; ++i) {
 
-                                affectedNodesN_acc[sssp_column_indices_acc[i]] = 1;
+                                affectedNodesN_acc[outDegreeIndices_acc[i]] = 1;
                             }
                         }
                     }
@@ -901,7 +907,18 @@ void updateShortestPath( std::vector<int>& new_graph_values,  std::vector<int>& 
             q.wait_and_throw();
         }
     }
+    std::cout << "Distance After" <<std::endl;
+    for (int i = 0; i < dist.size(); i++) {
+        std::cout <<dist[i]<< " ";
+    }
+    std::cout<<std::endl;
 
+    std::cout << "Parent After " <<std::endl;
+    for (int i = 0; i < parent.size(); i++) {
+        std::cout <<parent[i]<< " ";
+    }
+    std::cout<<std::endl;
+    }
 
 }
 
@@ -1069,12 +1086,12 @@ int main() {
 
     saveSSSPTreeToFile("SSSP_Tree.mtx", values, column_indices, row_pointers, parent);
 
-    std::vector<int> sssp_values;
-    std::vector<int> sssp_column_indices;
-    std::vector<int> sssp_row_pointers;
+    std::vector<int> outDegreeValues;
+    std::vector<int> outDegreeIndices;
+    std::vector<int> outDegreePointers;
     sortAndSaveMTX("SSSP_Tree.mtx", "sorted_SSSP_Tree.mtx");
-    readMTXToCSR("sorted_SSSP_Tree.mtx", sssp_values, sssp_column_indices, sssp_row_pointers);
-    //printCSRRepresentation(sssp_values, sssp_column_indices, sssp_row_pointers);
+    readMTXToCSR("sorted_graph.mtx", outDegreeValues, outDegreeIndices, outDegreePointers);
+    //printCSRRepresentation(outDegreeValues, outDegreeIndices, outDegreePointers);
 // Changed edges
     auto originalGraph = readMTX("sorted_graph.mtx");
 
@@ -1106,8 +1123,158 @@ int main() {
 
     
 
-    updateShortestPath(new_graph_values, new_graph_column_indices, new_graph_row_pointers, sssp_values, sssp_column_indices, sssp_row_pointers, dist, parent, inDegreeValues, inDegreeColumnPointers, inDegreeRowValues);
+    updateShortestPath(new_graph_values, new_graph_column_indices, new_graph_row_pointers, outDegreeValues, outDegreeIndices, outDegreePointers, dist, parent, inDegreeValues, inDegreeColumnPointers, inDegreeRowValues);
 
+//Tree 2
+
+    sortAndSaveMTX("graph.mtx", "sorted_graph2.mtx");
+
+    std::vector<int> values2;
+    std::vector<int> column_indices2;
+    std::vector<int> row_pointers2;
+
+    readMTXToCSR("sorted_graph2.mtx", values2, column_indices2, row_pointers2);
+    //printCSRRepresentation(values, column_indices, row_pointers);
+
+//Find SSSP tree and store in mtx file
+    std::vector<int> parent2(row_pointers2.size() - 1, -1); // takes child and returns it's parent
+    std::vector<int> dist2(row_pointers2.size() - 1, INT_MAX);
+    
+    // Run Dijkstra's algorithm from source vertex 0
+    dijkstra(values2, column_indices2, row_pointers2, 0, dist2, parent2);
+
+    saveSSSPTreeToFile("SSSP_Tree2.mtx", values2, column_indices2, row_pointers2, parent2);
+
+    std::vector<int> outDegreeValues2;
+    std::vector<int> outDegreeIndices2;
+    std::vector<int> outDegreePointers2;
+    sortAndSaveMTX("SSSP_Tree2.mtx", "sorted_SSSP_Tree2.mtx");
+    readMTXToCSR("sorted_graph2.mtx", outDegreeValues2, outDegreeIndices2, outDegreePointers2);
+    //printCSRRepresentation(outDegreeValues, outDegreeIndices, outDegreePointers);
+// Changed edges
+    auto originalGraph2 = readMTX("sorted_graph2.mtx");
+
+    int numVertices2 = row_pointers2.size() - 1;  // Should be determined from the MTX file or another source
+    int numChanges2 = 5;
+    int minWeight2 = 1;
+    int maxWeight2 = 10;
+
+    std::vector<std::tuple<int, int, int>> changedEdges2;
+    float deletePercentage2 = 1.0f;
+    auto newGraph2 = generateChangedGraph(originalGraph2, numVertices2, numChanges2, minWeight2, maxWeight2, changedEdges2, deletePercentage2);
+    // writeMTX by default sort by row for easy readings
+    writeMTX("new_graph2.mtx", newGraph2, numVertices2, true); 
+    writeMTX("changed_edges2.mtx", changedEdges2, numVertices2, false);
+
+    std::vector<int> new_graph_values2;
+    std::vector<int> new_graph_column_indices2;
+    std::vector<int> new_graph_row_pointers2;
+    readMTXToCSR("new_graph2.mtx", new_graph_values2, new_graph_column_indices2, new_graph_row_pointers2);
+    //printCSRRepresentation(new_graph_values, new_graph_column_indices, new_graph_row_pointers);
+
+
+    // Find Predecessor
+    std::vector<int> inDegreeValues2;
+    std::vector<int> inDegreeColumnPointers2;
+    std::vector<int> inDegreeRowValues2;
+    readMTXToTransposeCSR("new_graph2.mtx", inDegreeValues2, inDegreeRowValues2, inDegreeColumnPointers2);
+    //printCSRRepresentation(inDegreeValues, inDegreeRowValues, inDegreeColumnPointers);
+
+    
+
+    updateShortestPath(new_graph_values2, new_graph_column_indices2, new_graph_row_pointers2, outDegreeValues2, outDegreeIndices2, outDegreePointers2, dist2, parent2, inDegreeValues2, inDegreeColumnPointers2, inDegreeRowValues2);
+
+// Tree 3
+
+
+    sortAndSaveMTX("graph.mtx", "sorted_graph3.mtx");
+
+    std::vector<int> values3;
+    std::vector<int> column_indices3;
+    std::vector<int> row_pointers3;
+
+    readMTXToCSR("sorted_graph3.mtx", values3, column_indices3, row_pointers3);
+    //printCSRRepresentation(values, column_indices, row_pointers);
+
+//Find SSSP tree and store in mtx file
+    std::vector<int> parent3(row_pointers3.size() - 1, -1); // takes child and returns it's parent
+    std::vector<int> dist3(row_pointers3.size() - 1, INT_MAX);
+    
+    // Run Dijkstra's algorithm from source vertex 0
+    dijkstra(values3, column_indices3, row_pointers3, 0, dist3, parent3);
+
+    saveSSSPTreeToFile("SSSP_Tree3.mtx", values3, column_indices3, row_pointers3, parent3);
+
+    std::vector<int> outDegreeValues3;
+    std::vector<int> outDegreeIndices3;
+    std::vector<int> outDegreePointers3;
+    sortAndSaveMTX("SSSP_Tree3.mtx", "sorted_SSSP_Tree3.mtx");
+    readMTXToCSR("sorted_graph3.mtx", outDegreeValues3, outDegreeIndices3, outDegreePointers3);
+    //printCSRRepresentation(outDegreeValues, outDegreeIndices, outDegreePointers);
+// Changed edges
+    auto originalGraph3 = readMTX("sorted_graph3.mtx");
+
+    int numVertices3 = row_pointers3.size() - 1;  // Should be determined from the MTX file or another source
+    int numChanges3 = 5;
+    int minWeight3 = 1;
+    int maxWeight3 = 10;
+
+    std::vector<std::tuple<int, int, int>> changedEdges3;
+    float deletePercentage3 = 1.0f;
+    auto newGraph3 = generateChangedGraph(originalGraph3, numVertices3, numChanges3, minWeight3, maxWeight3, changedEdges3, deletePercentage3);
+    // writeMTX by default sort by row for easy readings
+    writeMTX("new_graph3.mtx", newGraph3, numVertices3, true); 
+    writeMTX("changed_edges3.mtx", changedEdges3, numVertices3, false);
+
+    std::vector<int> new_graph_values3;
+    std::vector<int> new_graph_column_indices3;
+    std::vector<int> new_graph_row_pointers3;
+    readMTXToCSR("new_graph3.mtx", new_graph_values3, new_graph_column_indices3, new_graph_row_pointers3);
+    //printCSRRepresentation(new_graph_values, new_graph_column_indices, new_graph_row_pointers);
+
+
+    // Find Predecessor
+    std::vector<int> inDegreeValues3;
+    std::vector<int> inDegreeColumnPointers3;
+    std::vector<int> inDegreeRowValues3;
+    readMTXToTransposeCSR("new_graph3.mtx", inDegreeValues3, inDegreeRowValues3, inDegreeColumnPointers3);
+    //printCSRRepresentation(inDegreeValues, inDegreeRowValues, inDegreeColumnPointers);
+
+    
+
+    updateShortestPath(new_graph_values3, new_graph_column_indices3, new_graph_row_pointers3, outDegreeValues3, outDegreeIndices3, outDegreePointers3, dist3, parent3, inDegreeValues3, inDegreeColumnPointers3, inDegreeRowValues3);
+
+
+// Create trees
+    
+    
+    Tree1 t1(parent);
+    Tree1 t2(parent2);
+    Tree1 t3(parent3);
+    std::vector<Tree*> trees = {&t1, &t2, &t3};
+
+    int k = trees.size();
+
+// Preference 
+    std::vector<int> Pref = {1, 1, 1};
+
+    std::vector<Edge> edges = constructGraph(trees, 3);
+    // for (const auto& edge : edges) {
+    //     std::cout << "Edge from " << edge.u << " to " << edge.v << " with weight " << edge.weight << std::endl;
+    // }
+
+    std::vector<int> weights(edges.size());
+    for (size_t i = 0; i < edges.size(); ++i) {
+        weights[i] = edges[i].weight;
+    }
+    updateWeights(edges, Pref, k);
+
+    for (const auto& edge : edges) {
+        std::cout << "Edge from " << edge.u << " to " << edge.v << " with updated weight " << edge.weight << std::endl;
+    }
+
+    parallelBellmanFord(edges, numVertices, 0);
+    
     return 0;
 }
 
