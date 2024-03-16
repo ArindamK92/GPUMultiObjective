@@ -304,17 +304,17 @@ void updateShortestPath(std::vector<std::pair<int, std::vector<int>>>& ssspTree,
             shortestDist[y] = shortestDist[x] + edge.weight;
             
             int oldParent = parentList[y + 1];
-            for (int j = 0; j < ssspTree[oldParent - 1].second.size(); j++ )
-            {
+            // for (int j = 0; j < ssspTree[oldParent - 1].second.size(); j++ )
+            // {
                 
-                if (ssspTree[oldParent - 1].second[j] == y + 1 )
-                {
-                    #pragma omp critical
-                    {
-                        ssspTree[oldParent - 1].second.erase(ssspTree[oldParent - 1].second.begin() + j);
-                    }
-                }
-            }
+            //     if (ssspTree[oldParent - 1].second[j] == y + 1 )
+            //     {
+            //         #pragma omp critical
+            //         {
+            //             ssspTree[oldParent - 1].second.erase(ssspTree[oldParent - 1].second.begin() + j);
+            //         }
+            //     }
+            // }
             parentList[y+1] = x + 1;
             #pragma omp critical
             {
@@ -376,16 +376,16 @@ void updateShortestPath(std::vector<std::pair<int, std::vector<int>>>& ssspTree,
             ssspTree[newParentIndex].second.push_back(n+1);
             parentList[edge.destination + 1] = newParentIndex + 1;      
         }
-        for (int j = 0; j < ssspTree[oldParent - 1].second.size() && oldParent >= -1 ; j++ )
-        {
-            if (ssspTree[oldParent - 1].second[j] == edge.destination + 1 )
-            {
-                #pragma omp critical
-                {
-                    ssspTree[oldParent - 1].second.erase(ssspTree[oldParent - 1].second.begin() + j);
-                }
-            }
-        }
+        // for (int j = 0; j < ssspTree[oldParent - 1].second.size() && oldParent >= -1 ; j++ )
+        // {
+        //     if (ssspTree[oldParent - 1].second[j] == edge.destination + 1 )
+        //     {
+        //         #pragma omp critical
+        //         {
+        //             ssspTree[oldParent - 1].second.erase(ssspTree[oldParent - 1].second.begin() + j);
+        //         }
+        //     }
+        // }
     }
 
     #pragma omp parallel for num_threads(NUM_THREADS)
@@ -455,16 +455,16 @@ void updateShortestPath(std::vector<std::pair<int, std::vector<int>>>& ssspTree,
                             
 
                             ssspTree[newParentIndex].second.push_back(n+1);
-                            for (int i = 0; i < ssspTree[oldParent - 1].second.size(); i++ )
-                            {
-                                if (ssspTree[oldParent - 1].second[i] == n + 1 )
-                                {
-                                    #pragma omp critical
-                                    {
-                                        ssspTree[oldParent - 1].second.erase(ssspTree[oldParent - 1].second.begin() + i);
-                                    }                 
-                                }
-                            }
+                            // for (int i = 0; i < ssspTree[oldParent - 1].second.size(); i++ )
+                            // {
+                            //     if (ssspTree[oldParent - 1].second[i] == n + 1 )
+                            //     {
+                            //         #pragma omp critical
+                            //         {
+                            //             ssspTree[oldParent - 1].second.erase(ssspTree[oldParent - 1].second.begin() + i);
+                            //         }                 
+                            //     }
+                            // }
 
 
                         }
