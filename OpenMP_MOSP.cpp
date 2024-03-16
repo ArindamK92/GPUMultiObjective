@@ -294,6 +294,8 @@ void updateShortestPath(std::vector<std::pair<int, std::vector<int>>>& ssspTree,
         }
     }
 
+    auto startSOSPPart1 = std::chrono::high_resolution_clock::now();
+
     #pragma omp parallel for num_threads(NUM_THREADS)
     for (int i = 0; i < insertedEdges.size(); i++) {
         const Edge& edge = insertedEdges[i];
@@ -399,6 +401,12 @@ void updateShortestPath(std::vector<std::pair<int, std::vector<int>>>& ssspTree,
             }
         }
     }
+
+    auto stopSOSPPart1 = std::chrono::high_resolution_clock::now();
+    auto durationSOSPPart1 = std::chrono::duration_cast<std::chrono::seconds>(stopSOSPPart1 - startSOSPPart1);
+
+    auto startSOSPPart2 = std::chrono::high_resolution_clock::now();
+
     while (1)
     {
         int sum = 0;
@@ -483,6 +491,10 @@ void updateShortestPath(std::vector<std::pair<int, std::vector<int>>>& ssspTree,
             }
         }
     }
+    auto stopSOSPPart2 = std::chrono::high_resolution_clock::now();
+
+
+    auto durationSOSPPart2 = std::chrono::duration_cast<std::chrono::seconds>(stopSOSPPart2 - startSOSPPart2);
 }
     
 int main(int argc, char** argv) {
