@@ -1,6 +1,8 @@
 # Instructions to run the code
 
-## Hellblender cluster dependency 
+## SYCL Project
+
+### Hellblender cluster dependency 
 
 ssh \<toYourMachine\>
 
@@ -24,5 +26,10 @@ Every time after openinng new window run below commands:
 export DPCPP_HOME=~/sycl_workspace && export PATH=$DPCPP_HOME/llvm/build/bin:$PATH && export LD_LIBRARY_PATH=$DPCPP_HOME/llvm/build/lib:$LD_LIBRARY_PATH && cd sycl_workspace/GPUMultiObjective/tools/
 
 
-## Building the SYCL project and run
+### Building the SYCL project and run
 clang++ -fsycl -fsycl-targets=nvptx64-nvidia-cuda SYCL_Final.cpp -o SYCL_Final && ./SYCL_Final
+
+## OpenMP project
+
+g++ -fopenmp -std=c++11 -o program main.cpp
+
