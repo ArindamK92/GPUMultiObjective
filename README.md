@@ -33,3 +33,18 @@ clang++ -fsycl -fsycl-targets=nvptx64-nvidia-cuda SYCL_Final.cpp -o SYCL_Final &
 
 g++ -fopenmp -std=c++11 -o program main.cpp
 
+## Base paper
+
+### Clone the library
+git clone git@github.com:SMShovan/multicrit.git
+
+### Source the libraries 
+source ../lib/tbb/bin/tbbvars.sh intel64
+### reflect changes
+make configure
+### make 
+make all
+### run scripts
+From scripts/ 
+run build_binaries.sh
+
