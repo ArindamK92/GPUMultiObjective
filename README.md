@@ -2,7 +2,7 @@
 
 ## Hellblender cluster dependency 
 
-ssh <toYourMachine>
+ssh \<toYourMachine\>
 
 srun -p gpu --gres gpu:A100:1 -N 1 --ntasks-per-node 8 -t 02:00:00 --mem 200G --pty /bin/bash
 
